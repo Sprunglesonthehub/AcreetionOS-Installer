@@ -126,7 +126,7 @@ partition_and_format() {
             run_cmd echo "# FATAL: Could not find partition by label 'AOS_ROOT' after creation."
             return 1
         fi
-        run_cmd mkfs.ext4 -F "$arch_root_part"
+        run_cmd mkfs.ext4 -F -q "$arch_root_part"
         run_cmd mount "$arch_root_part" /mnt
         run_cmd mkdir -p /mnt/boot
         run_cmd mount "$efi_part" /mnt/boot
@@ -174,7 +174,7 @@ EOF
         fi
 
         run_cmd mkfs.fat -F32 "$efi_part"
-        run_cmd mkfs.ext4 -F "$root_part"
+        run_cmd mkfs.ext4 -F -q "$root_part"
         run_cmd mount "$root_part" /mnt
         run_cmd mkdir -p /mnt/boot
         run_cmd mount "$efi_part" /mnt/boot
