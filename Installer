@@ -199,7 +199,7 @@ EOF
 install_base_system() {
     echo "# --- Installing Arch Linux Base System ---" >> "$LOG_FILE"
     
-    # Create a custom pacman.conf for pacstrap to use only the specified repo
+    # Create a custom pacman.conf for pacstrap to use only the specified repos
     run_cmd echo "# Creating temporary pacman.conf for pacstrap"
     cat > /tmp/pacman.conf <<EOF
 [options]
@@ -208,7 +208,16 @@ SigLevel = Never
 LocalFileSigLevel = Optional
 
 [acreetionOSREPO]
+SigLevel = Optional
 Server = https://darrengames.ddns.net:1500/repo/\$arch
+
+[acreetionOSREPO-main]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/repo-main/\$arch
+
+[personal]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/personal
 EOF
 
     local pkgs_to_install=(
@@ -262,7 +271,16 @@ SigLevel = Never
 LocalFileSigLevel = Optional
 
 [acreetionOSREPO]
+SigLevel = Optional
 Server = https://darrengames.ddns.net:1500/repo/\$arch
+
+[acreetionOSREPO-main]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/repo-main/\$arch
+
+[personal]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/personal
 PACMAN_EOF
 
 echo "--- Synchronizing new repository databases ---"; pacman -Sy
