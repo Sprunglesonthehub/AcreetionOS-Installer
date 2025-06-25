@@ -268,8 +268,11 @@ echo "--- Chroot configuration complete ---"
 EOF
     chmod +x /mnt/setup_chroot.sh
     run_cmd echo "# --- Executing Chroot Configuration ---"
-    local cmd="arch-chroot /mnt /setup_chroot.sh '${DUAL_BOOT_MODE}' '${HOSTNAME}' '${USERNAME}' '${USER_PASSWORD}' '${chroot_pkgs_string}'"
-    stdbuf -oL -eL $cmd >> "$LOG_FILE" 2>&1 &
+    
+    # Correctly pass arguments to arch-chroot to avoid quoting issues.
+    stdbuf -oL -eL arch-chroot /mnt /setup_chroot.sh \
+        "$DUAL_BOOT_MODE" "$HOSTNAME" "$USERNAME" "$USER_PASSWORD" "$chroot_pkgs_string" >> "$LOG_FILE" 2>&1 &
+        
     local chroot_pid=$!
     dialog --backtitle "AcreetionOS Installer" --title "Configuring System (Live Log)" --tailboxbg "$LOG_FILE" 30 100
     wait $chroot_pid
