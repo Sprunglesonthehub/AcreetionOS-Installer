@@ -198,13 +198,26 @@ EOF
 
 install_base_system() {
     echo "# --- Installing Arch Linux Base System ---" >> "$LOG_FILE"
-    # Added 'sudo' to the list of essential packages.
+    
+    # Create a custom pacman.conf for pacstrap to use only the specified repo
+    run_cmd echo "# Creating temporary pacman.conf for pacstrap"
+    cat > /tmp/pacman.conf <<EOF
+[options]
+Architecture = auto
+SigLevel = Never
+LocalFileSigLevel = Optional
+
+[acreetionOSREPO]
+Server = https://darrengames.ddns.net:1500/repo/\$arch
+EOF
+
     local pkgs_to_install=(
         "base" 
         "$KERNEL_PACKAGE" 
         "linux-firmware" 
         "$KERNEL_HEADERS_PACKAGE" 
         "sudo" 
+        "nano"
         "networkmanager" 
         "git" 
         "vim" 
@@ -215,8 +228,13 @@ install_base_system() {
     [ "$DUAL_BOOT_MODE" = true ] && pkgs_to_install+=("os-prober")
     pkgs_to_install+=("${PACSTRAP_EXTRA_PKGS[@]}")
 
-    stdbuf -oL -eL pacstrap -K /mnt "${pkgs_to_install[@]}" 2>&1 | tee -a "$LOG_FILE" | dialog --backtitle "AcreetionOS Installer" --title "Installing Base System (Live)" --programbox 30 100
-    return ${PIPESTATUS[0]}
+    stdbuf -oL -eL pacstrap -C /tmp/pacman.conf -K /mnt "${pkgs_to_install[@]}" 2>&1 | tee -a "$LOG_FILE" | dialog --backtitle "AcreetionOS Installer" --title "Installing Base System (Live)" --programbox 30 100
+    local exit_code=${PIPESTATUS[0]}
+    
+    # Clean up the temporary config file
+    rm /tmp/pacman.conf
+    
+    return $exit_code
 }
 
 configure_chroot() {
@@ -236,25 +254,29 @@ cat > /etc/hosts <<HOSTS_EOF
 ::1         localhost
 127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
-echo "--- Adding AcreetionOS custom repositories ---"
-cat >> /etc/pacman.conf <<PACMAN_EOF
+echo "--- Creating final system pacman.conf ---"
+cat > /etc/pacman.conf <<PACMAN_EOF
+[options]
+Architecture = auto
+SigLevel = Never
+LocalFileSigLevel = Optional
 
 [acreetionOSREPO]
-SigLevel = Optional
 Server = https://darrengames.ddns.net:1500/repo/\$arch
-[acreetionOSREPO-main]
-SigLevel = Never
-Server = https://darrengames.ddns.net:1500/repo-main/\$arch
-[personal]
-SigLevel = Never
-Server = https://darrengames.ddns.net:1500/personal
 PACMAN_EOF
+
 echo "--- Synchronizing new repository databases ---"; pacman -Sy
 echo "--- Setting up user accounts and sudo ---"
 passwd -l root
 useradd -m -G wheel -s /bin/bash "${USERNAME}"; echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
 # This line is now safe because the 'sudo' package provides /etc/sudoers
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+echo "--- Branding system as AcreetionOS ---"
+sed -i 's/NAME="Arch Linux"/NAME="AcreetionOS"/' /etc/os-release
+sed -i 's/PRETTY_NAME="Arch Linux"/PRETTY_NAME="AcreetionOS"/' /etc/os-release
+sed -i 's/ID=arch/ID=acreetionos/' /etc/os-release
+
 echo "--- Installing and configuring GRUB bootloader ---"
 if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; fi
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
@@ -264,10 +286,9 @@ CORE_PKGS="cinnamon lightdm lightdm-gtk-greeter calamares-config gnome-terminal 
 pacman -S --noconfirm --needed ${CORE_PKGS}
 echo "--- Installing user-selected optional packages ---"
 if [ -n "$CHROOT_PKGS_STRING" ]; then
-    REPO_PKGS=(); AUR_PKGS=()
-    for pkg in $CHROOT_PKGS_STRING; do if pacman -Si "$pkg" &> /dev/null; then REPO_PKGS+=("$pkg"); else AUR_PKGS+=("$pkg"); fi; done
-    if [ ${#REPO_PKGS[@]} -gt 0 ]; then echo "Installing repository packages: ${REPO_PKGS[*]}"; pacman -S --noconfirm --needed "${REPO_PKGS[@]}"; fi
-    if [ ${#AUR_PKGS[@]} -gt 0 ]; then echo "Installing AUR packages: ${AUR_PKGS[*]}"; if command -v yay &> /dev/null; then su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"; else echo "WARNING: 'yay' not found for AUR packages."; fi; fi
+    # We don't distinguish between repo and AUR here as everything comes from the custom repo.
+    echo "Installing repository packages: $CHROOT_PKGS_STRING"
+    pacman -S --noconfirm --needed $CHROOT_PKGS_STRING
 fi
 echo "--- Enabling essential system services ---"
 systemctl enable lightdm.service; systemctl enable NetworkManager.service
@@ -312,8 +333,6 @@ run_full_installation() {
     sleep 2
     configure_chroot; [ $? -ne 0 ] && return 1
 
-    # Fix for TUI visual glitch after chroot log
-    clear
     return 0
 }
 
@@ -412,8 +431,12 @@ main() {
                             run_full_installation
                             if [ $? -eq 0 ]; then
                                 INSTALLATION_COMPLETE=true
+                                # clear screen before showing final success message
+                                clear
                                 dialog --backtitle "AcreetionOS Installer" --title "Complete!" --msgbox "AcreetionOS installation finished successfully!\n\nYou can now choose what to do next from the main menu." 8 60
                             else
+                                # clear screen before showing final failure message
+                                clear
                                 dialog --backtitle "AcreetionOS Installer" --title "FATAL ERROR" --msgbox "The installation failed. Please check the log file for details:\n\n$LOG_FILE" 10 60
                             fi
                         fi
