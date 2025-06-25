@@ -109,34 +109,39 @@ partition_and_format() {
     umount ${TARGET_DISK}* 2>/dev/null || true
 
     if [ "$DUAL_BOOT_MODE" = true ]; then
-        # This part of the code is for dual booting and doesn't need wipefs
-        # as it's modifying an existing layout, not starting from scratch.
         run_cmd echo "# Dual Boot Mode Enabled (Using sgdisk for safety)"
         local efi_part; efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}')
         local win_part; win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}')
-        run_cmd echo "# Found EFI partition to reuse: $efi_part"
-        run_cmd echo "# Found Windows partition to shrink: $win_part"
-        run_cmd ntfsresize --size "-${ARCH_PART_SIZE}G" "$win_part"
-        run_cmd echo "# Creating new partition for AcreetionOS with label AOS_ROOT..."
-        run_cmd sgdisk --largest-new=0 --change-name="0:AOS_ROOT" --typecode=0:8300 "$TARGET_DISK"
-        run_cmd partprobe "$TARGET_DISK"
+        run_cmd echo "# Found EFI partition to reuse: $efi_part" || { run_cmd echo "FATAL: Could not find EFI partition to reuse."; return 1; }
+        run_cmd echo "# Found Windows partition to shrink: $win_part" || { run_cmd echo "FATAL: Could not find Windows partition to shrink."; return 1; }
+        run_cmd ntfsresize --size "-${ARCH_PART_SIZE}G" "$win_part" || { run_cmd echo "FATAL: Failed to resize Windows partition."; return 1; }
+        run_cmd echo "# Creating new partition for AcreetionOS..."
+        run_cmd sgdisk --largest-new=0 --change-name="0:AOS_ROOT" --typecode=0:8300 "$TARGET_DISK" || { run_cmd echo "FATAL: Failed to create new partition with sgdisk."; return 1; }
+        run_cmd partprobe "$TARGET_DISK" || { run_cmd echo "WARN: partprobe failed, continuing anyway..."; }
+        run_cmd udevadm settle || { run_cmd echo "WARN: udevadm settle failed, continuing anyway..."; }
         local arch_root_part="/dev/disk/by-partlabel/AOS_ROOT"
         run_cmd echo "# Verifying new partition at $arch_root_part"
         if ! [ -b "$arch_root_part" ]; then
-            run_cmd echo "# FATAL: Could not find partition by label 'AOS_ROOT' after creation."
-            return 1
+            run_cmd echo "# FATAL: Could not find partition by label 'AOS_ROOT' after creation. Waiting 5s and trying again..."
+            sleep 5
+            run_cmd partprobe "$TARGET_DISK"
+            run_cmd udevadm settle
+            if ! [ -b "$arch_root_part" ]; then
+                run_cmd echo "# FATAL: Still could not find partition by label 'AOS_ROOT'. Aborting."
+                return 1
+            fi
         fi
-        run_cmd wipefs -a "$arch_root_part"
-        run_cmd mkfs.ext4 -F -q "$arch_root_part"
-        run_cmd mount "$arch_root_part" /mnt
-        run_cmd mkdir -p /mnt/boot
-        run_cmd mount "$efi_part" /mnt/boot
+        run_cmd wipefs -a "$arch_root_part" || { run_cmd echo "FATAL: Failed to wipe new root partition."; return 1; }
+        run_cmd mkfs.ext4 -F -q "$arch_root_part" || { run_cmd echo "FATAL: Failed to format new root partition."; return 1; }
+        run_cmd mount "$arch_root_part" /mnt || { run_cmd echo "FATAL: Failed to mount new root partition."; return 1; }
+        run_cmd mkdir -p /mnt/boot || { run_cmd echo "FATAL: Failed to create /mnt/boot directory."; return 1; }
+        run_cmd mount "$efi_part" /mnt/boot || { run_cmd echo "FATAL: Failed to mount EFI partition."; return 1; }
     else
-        # Overwrite mode - this is where we need to be robust against previous runs.
+        # Overwrite mode
         run_cmd echo "# Overwrite Mode Enabled (Using fdisk)"
         
         echo "# Wiping existing partition table and signatures from $TARGET_DISK..." >> "$LOG_FILE"
-        run_cmd wipefs -a "$TARGET_DISK"
+        run_cmd wipefs -a "$TARGET_DISK" || { run_cmd echo "FATAL: Failed to wipe target disk."; return 1; }
         
         echo "# Executing fdisk on $TARGET_DISK..." >> "$LOG_FILE"
         fdisk "$TARGET_DISK" >> "$LOG_FILE" 2>&1 <<EOF
@@ -158,7 +163,9 @@ EOF
             return 1
         fi
 
-        run_cmd partprobe "$TARGET_DISK"; sleep 2
+        run_cmd partprobe "$TARGET_DISK" || { run_cmd echo "WARN: partprobe failed, but this might be okay."; }
+        run_cmd echo "# Waiting for kernel to recognize new partitions..."
+        run_cmd udevadm settle || { run_cmd echo "WARN: udevadm settle failed, continuing with a delay."; sleep 3; }
 
         local efi_part="${TARGET_DISK}1"
         local root_part="${TARGET_DISK}2"
@@ -174,17 +181,17 @@ EOF
         fi
         
         run_cmd echo "# Wiping potential old signatures from new partitions..."
-        run_cmd wipefs -a "$efi_part"
-        run_cmd wipefs -a "$root_part"
+        run_cmd wipefs -a "$efi_part" || { run_cmd echo "FATAL: Failed to wipe EFI partition."; return 1; }
+        run_cmd wipefs -a "$root_part" || { run_cmd echo "FATAL: Failed to wipe root partition."; return 1; }
 
         run_cmd echo "# Formatting partitions..."
-        run_cmd mkfs.fat -F32 "$efi_part"
-        run_cmd mkfs.ext4 -F -q "$root_part"
+        run_cmd mkfs.fat -F32 "$efi_part" || { run_cmd echo "FATAL: mkfs.fat failed on EFI partition."; return 1; }
+        run_cmd mkfs.ext4 -F -q "$root_part" || { run_cmd echo "FATAL: mkfs.ext4 failed on root partition."; return 1; }
         
         run_cmd echo "# Mounting filesystems..."
-        run_cmd mount "$root_part" /mnt
-        run_cmd mkdir -p /mnt/boot
-        run_cmd mount "$efi_part" /mnt/boot
+        run_cmd mount "$root_part" /mnt || { run_cmd echo "FATAL: Failed to mount root partition $root_part."; return 1; }
+        run_cmd mkdir -p /mnt/boot || { run_cmd echo "FATAL: Failed to create /mnt/boot directory."; return 1; }
+        run_cmd mount "$efi_part" /mnt/boot || { run_cmd echo "FATAL: Failed to mount EFI partition $efi_part."; return 1; }
     fi
     return 0
 }
