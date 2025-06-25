@@ -4,7 +4,7 @@
 #  AcreetionOS Arch Linux Installation Script
 #
 #  Author: AI Assistant
-#  Version: 26.0 (VM Guest Support)
+#  Version: 27.0 (fdisk Partitioning)
 #
 #  !!! DANGER !!!
 #  This is a LIVE installer and will make PERMANENT, DESTRUCTIVE
@@ -109,7 +109,9 @@ partition_and_format() {
     umount ${TARGET_DISK}* 2>/dev/null || true
 
     if [ "$DUAL_BOOT_MODE" = true ]; then
-        run_cmd "# Dual Boot Mode Enabled"
+        # Use sgdisk for dual boot as it's safer and non-destructive.
+        # fdisk is not suitable for scripting this scenario.
+        run_cmd "# Dual Boot Mode Enabled (Using sgdisk for safety)"
         local efi_part; efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}')
         local win_part; win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}')
         run_cmd "# Found EFI partition to reuse: $efi_part"; run_cmd "# Found Windows partition to shrink: $win_part"
@@ -121,16 +123,47 @@ partition_and_format() {
         if ! [ -b "$arch_root_part" ]; then run_cmd "# FATAL: Could not find partition by label 'AOS_ROOT' after creation."; return 1; fi
         run_cmd "mkfs.ext4 -F $arch_root_part"; run_cmd "mount $arch_root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"
     else
-        run_cmd "# Overwrite Mode Enabled"
-        local efi_label="AOS_EFI"; local root_label="AOS_ROOT"
-        run_cmd "sgdisk --zap-all $TARGET_DISK"
-        run_cmd "sgdisk --new=1:0:+512M --typecode=1:ef00 --change-name=1:'$efi_label' $TARGET_DISK"
-        run_cmd "sgdisk --new=2:0:0 --typecode=2:8300 --change-name=2:'$root_label' $TARGET_DISK"
+        # Use fdisk for a clean overwrite, as requested.
+        run_cmd "# Overwrite Mode Enabled (Using fdisk)"
+        
+        # This pipes commands into fdisk to create a GPT table and two partitions.
+        run_cmd "fdisk $TARGET_DISK" <<EOF
+g
+n
+1
+
++512M
+t
+1
+n
+2
+
+
+w
+EOF
+        [ $? -ne 0 ] && run_cmd "# FATAL: fdisk partitioning failed." && return 1
+
         run_cmd "partprobe $TARGET_DISK"; sleep 2
-        local efi_part="/dev/disk/by-partlabel/$efi_label"; local root_part="/dev/disk/by-partlabel/$root_label"
+
+        # Determine partition device names (e.g., /dev/sda1 vs /dev/nvme0n1p1)
+        local efi_part="${TARGET_DISK}1"
+        local root_part="${TARGET_DISK}2"
+        if [[ $TARGET_DISK == *"nvme"* ]]; then
+            efi_part="${TARGET_DISK}p1"
+            root_part="${TARGET_DISK}p2"
+        fi
+        
         run_cmd "# Verifying partitions at $efi_part and $root_part"
-        if ! [ -b "$efi_part" ] || ! [ -b "$root_part" ]; then run_cmd "# FATAL: Could not find partitions by label after creation. Check logs."; return 1; fi
-        run_cmd "mkfs.fat -F32 $efi_part"; run_cmd "mkfs.ext4 -F $root_part"; run_cmd "mount $root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"
+        if ! [ -b "$efi_part" ] || ! [ -b "$root_part" ]; then
+            run_cmd "# FATAL: Could not find partitions after running fdisk. Check logs."
+            return 1
+        fi
+
+        run_cmd "mkfs.fat -F32 $efi_part"
+        run_cmd "mkfs.ext4 -F $root_part"
+        run_cmd "mount $root_part /mnt"
+        run_cmd "mkdir -p /mnt/boot"
+        run_cmd "mount $efi_part /mnt/boot"
     fi
     return 0
 }
@@ -203,7 +236,6 @@ if [ -f /usr/lib/systemd/system/vboxservice.service ]; then systemctl enable vbo
 if [ -f /usr/lib/systemd/system/vmtoolsd.service ]; then systemctl enable vmtoolsd.service; fi
 if [ -f /usr/lib/systemd/system/qemu-guest-agent.service ]; then systemctl enable qemu-guest-agent.service; fi
 if [ -f /usr/lib/systemd/system/spice-vdagentd.service ]; then systemctl enable spice-vdagentd.service; fi
-# Hyper-V daemons are enabled by default through presets, no need to manually enable.
 echo "--- Chroot configuration complete ---"
 EOF
     chmod +x /mnt/setup_chroot.sh
