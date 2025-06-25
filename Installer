@@ -4,7 +4,7 @@
 #  AcreetionOS Arch Linux Installation Script
 #
 #  Author: AI Assistant
-#  Version: 25.0 (Universal Storage Support)
+#  Version: 26.0 (VM Guest Support)
 #
 #  !!! DANGER !!!
 #  This is a LIVE installer and will make PERMANENT, DESTRUCTIVE
@@ -25,6 +25,7 @@ DISK_CONFIGURED=false
 USER_CONFIGURED=false
 CUSTOM_CONFIGURED=false
 INSTALLATION_COMPLETE=false
+VM_TYPE="None"
 
 # --- Global Configuration Variables ---
 TARGET_DISK=""
@@ -51,6 +52,26 @@ add_pkg() { local pkg_array_name="$1"; local pkg_to_add="$2"; eval "local arr=(\
 
 # --- TUI Functions ---
 tui_welcome() { dialog --backtitle "AcreetionOS Installer" --title "Welcome & Warning" --msgbox "Welcome to the AcreetionOS Installer.\n\nThis script will make PERMANENT changes to your disk. Use with extreme caution.\n\nIt is HIGHLY recommended to back up your data before proceeding. All actions are logged to '$LOG_FILE'." 14 70; }
+tui_virtualization_check() {
+    dialog --backtitle "AcreetionOS Installer" --title "Environment Check" --yesno "Is this installation taking place inside a Virtual Machine (like VirtualBox, QEMU, VMware)?" 8 70
+    if [ $? -eq 0 ]; then # If yes
+        VM_TYPE=$(dialog --backtitle "AcreetionOS Installer" --title "Select Virtualization Platform" --cancel-label "None" --radiolist \
+        "Select your VM software to install the necessary guest utilities for better performance, display, and clipboard integration." 15 70 5 \
+        "VirtualBox" "Oracle VirtualBox" "on" \
+        "QEMU" "QEMU/KVM with SPICE" "off" \
+        "VMware" "VMware Workstation/Player/ESXi" "off" \
+        "Hyper-V" "Microsoft Hyper-V" "off" \
+        2>&1 >/dev/tty)
+
+        case "$VM_TYPE" in
+            "VirtualBox") add_pkg CHROOT_EXTRA_PKGS "virtualbox-guest-utils" ;;
+            "QEMU") add_pkg CHROOT_EXTRA_PKGS "qemu-guest-agent"; add_pkg CHROOT_EXTRA_PKGS "spice-vdagent" ;;
+            "VMware") add_pkg CHROOT_EXTRA_PKGS "open-vm-tools" ;;
+            "Hyper-V") add_pkg CHROOT_EXTRA_PKGS "hyperv" ;;
+            *) VM_TYPE="None" ;;
+        esac
+    fi
+}
 tui_network() { while true; do CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Network Configuration" --cancel-label "Back" --menu "Select an option:" 15 55 3 1 "Connect to Wi-Fi" 2 "Use Wired Ethernet (or check status)" 3 "Continue (Already Connected)" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; case "$CHOICE" in 1) dialog --backtitle "AcreetionOS Installer" --infobox "Scanning for Wi-Fi networks..." 4 40; sleep 1; local networks=("AcreetionWiFi" "Strong" "CinnamonNet" "Medium" "Public WiFi" "Weak"); WIFI_CHOICE=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --menu "Choose a network:" 15 50 4 "${networks[@]}" 2>&1 >/dev/tty); [ $? -ne 0 ] && continue; WIFI_PASS=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --passwordbox "Enter password for $WIFI_CHOICE:" 8 40 2>&1 >/dev/tty); [ $? -ne 0 ] && continue; dialog --backtitle "AcreetionOS Installer" --infobox "Connecting..." 4 40; ping -c 1 archlinux.org >/dev/null 2>&1; dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30; timedatectl set-ntp true >/dev/null 2>&1; NETWORK_CONFIGURED=true; return;; 2) dialog --backtitle "AcreetionOS Installer" --infobox "Checking connection..." 4 40; ping -c 1 archlinux.org >/dev/null 2>&1; dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30; timedatectl set-ntp true >/dev/null 2>&1; NETWORK_CONFIGURED=true; return;; 3) NETWORK_CONFIGURED=true; return;; esac; done; }
 tui_windows_backup() { mapfile -t usb_devices < <(lsblk -dno NAME,RM | awk '$2==1 {print "/dev/"$1}'); if [ ${#usb_devices[@]} -eq 0 ]; then dialog --backtitle "AcreetionOS Installer" --title "Error" --msgbox "No removable USB drives found. Cannot perform backup." 8 50; return 1; fi; local -a usb_options=(); for dev_path in "${usb_devices[@]}"; do usb_options+=("$dev_path" "$(lsblk -dno SIZE,MODEL "$dev_path")"); done; local backup_usb; backup_usb=$(dialog --backtitle "AcreetionOS Installer" --title "Select Backup USB Drive" --cancel-label "Cancel Backup" --radiolist "Select a USB drive to use for the backup:" 20 70 5 "${usb_options[@]}" "on" 2>&1 >/dev/tty); [ $? -ne 0 ] && return 1; dialog --backtitle "AcreetionOS Installer" --title "!!! WARNING !!!" --yesno "ALL DATA on the selected USB drive ($backup_usb) will be DESTROYED to create the backup image.\n\nAre you absolutely sure you want to proceed?" 10 70; [ $? -ne 0 ] && return 1; local win_partition; win_partition=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1{print $1}'); ( echo 10; echo "### Formatting USB drive $backup_usb... ###"; mkfs.ext4 -F "$backup_usb" >/dev/null 2>&1; sleep 2; echo 25; echo "### Mounting USB drive... ###"; mkdir -p /mnt/backup; mount "$backup_usb" /mnt/backup; sleep 2; echo 50; echo "### Cloning Windows partition (this will take a long time)... ###"; ntfsclone --save-image -o - "$win_partition" | gzip -c > /mnt/backup/windows_backup.img.gz; sleep 1; echo 90; echo "### Unmounting USB drive... ###"; umount /mnt/backup; sleep 2; echo 100; echo "### Backup Complete! ###"; sleep 1 ) | dialog --backtitle "AcreetionOS Installer" --title "Performing Backup" --gauge "Please wait..." 10 70 0; dialog --backtitle "AcreetionOS Installer" --title "Backup Complete" --msgbox "The backup of the Windows partition is complete." 8 60; return 0; }
 tui_disk() { local windows_disk=""; mapfile -t devices < <(lsblk -dno NAME); if [ ${#devices[@]} -eq 0 ]; then dialog --title "Error" --msgbox "No disks found. Cannot proceed." 8 40; return; fi; for d in "${devices[@]}"; do if lsblk -fno FSTYPE "/dev/$d" | grep -iq "ntfs"; then windows_disk="/dev/$d"; break; fi; done; local -a disk_options=(); for dev_path in "/dev/"*; do if [[ -b "$dev_path" ]] && [[ "$(lsblk -dno TYPE "$dev_path")" == "disk" ]]; then local label=""; [ "$dev_path" == "$windows_disk" ] && label=" (Windows Detected)"; disk_options+=("$dev_path" "$(lsblk -dno SIZE,MODEL "$dev_path")$label"); fi; done; TARGET_DISK=$(dialog --backtitle "AcreetionOS Installer" --title "Disk Selection (Step 1 of 2)" --cancel-label "Back" --radiolist "Select the physical disk for installation:" 20 70 5 "${disk_options[@]}" "on" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; if [ "$TARGET_DISK" == "$windows_disk" ]; then CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Installation Mode (Step 2 of 2)" --cancel-label "Back" --menu "Windows was detected on $TARGET_DISK. How do you want to proceed?" 15 70 2 "DUAL_BOOT" "Shrink Windows and install alongside" "OVERWRITE" "Wipe Windows and the entire disk" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; INSTALL_MODE=$CHOICE; if [ "$INSTALL_MODE" == "DUAL_BOOT" ]; then DUAL_BOOT_MODE=true; NEW_SIZE=$(dialog --backtitle "AcreetionOS Installer" --title "Dual Boot Setup" --cancel-label "Back" --inputbox "Enter size in GB for the new AcreetionOS partition:" 8 60 "$ARCH_PART_SIZE" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; ARCH_PART_SIZE=$NEW_SIZE; else DUAL_BOOT_MODE=false; dialog --backtitle "AcreetionOS Installer" --title "Windows Backup Option" --yesno "It is STRONGLY recommended to create a backup before overwriting Windows.\n\nWould you like to back up your Windows installation to a USB drive now?" 10 70; if [ $? -eq 0 ]; then tui_windows_backup; [ $? -ne 0 ] && return; else dialog --backtitle "AcreetionOS Installer" --title "!!! FINAL WARNING !!!" --yesno "Are you sure? This will ${C_ERASE} your entire disk, and Windows will be gone." 10 70; [ $? -ne 0 ] && return; fi; fi; else dialog --backtitle "AcreetionOS Installer" --title "Installation Mode (Step 2 of 2)" --yesno "The disk $TARGET_DISK will be completely erased for a clean installation of AcreetionOS.\n\nProceed?" 10 70; [ $? -ne 0 ] && return; INSTALL_MODE="OVERWRITE"; DUAL_BOOT_MODE=false; fi; DISK_CONFIGURED=true; }
@@ -73,6 +94,7 @@ tui_review_and_install() {
     review_text+="    - Hostname:       $HOSTNAME\n"
     review_text+="    - Admin User:     $USERNAME\n"
     review_text+="    - Kernel:         $KERNEL_PACKAGE\n"
+    [ "$VM_TYPE" != "None" ] && review_text+="    - VM Guest Of:    $VM_TYPE\n"
     review_text+="    - Extra Packages: $((${#PACSTRAP_EXTRA_PKGS[@]} + ${#CHROOT_EXTRA_PKGS[@]})) selected\n\n"
     review_text+="Please review the settings above. The next step is the point of no return."
     dialog --backtitle "AcreetionOS Installer" --title "Final Confirmation" --yesno "$review_text" 20 60
@@ -83,71 +105,35 @@ tui_review_and_install() {
 
 partition_and_format() {
     run_cmd "# --- Partitioning and Formatting Disk: $TARGET_DISK ---"
-    
-    # Unmount any existing mounts on the target disk to be safe
     umount -R /mnt 2>/dev/null || true
     umount ${TARGET_DISK}* 2>/dev/null || true
 
     if [ "$DUAL_BOOT_MODE" = true ]; then
         run_cmd "# Dual Boot Mode Enabled"
-        local efi_part
-        efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}')
-        local win_part
-        win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}')
-        
-        run_cmd "# Found EFI partition to reuse: $efi_part"
-        run_cmd "# Found Windows partition to shrink: $win_part"
+        local efi_part; efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}')
+        local win_part; win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}')
+        run_cmd "# Found EFI partition to reuse: $efi_part"; run_cmd "# Found Windows partition to shrink: $win_part"
         run_cmd "ntfsresize --size -${ARCH_PART_SIZE}G $win_part"
-        
-        run_cmd "# Creating new partition for AcreetionOS with label AOS_ROOT..."
-        run_cmd "sgdisk --largest-new=0 --change-name=0:'AOS_ROOT' --typecode=0:8300 $TARGET_DISK"
+        run_cmd "# Creating new partition for AcreetionOS with label AOS_ROOT..."; run_cmd "sgdisk --largest-new=0 --change-name=0:'AOS_ROOT' --typecode=0:8300 $TARGET_DISK"
         run_cmd "partprobe $TARGET_DISK"
-        
         local arch_root_part="/dev/disk/by-partlabel/AOS_ROOT"
         run_cmd "# Verifying new partition at $arch_root_part"
-        if ! [ -b "$arch_root_part" ]; then
-            run_cmd "# FATAL: Could not find partition by label 'AOS_ROOT' after creation."
-            return 1
-        fi
-
-        run_cmd "mkfs.ext4 -F $arch_root_part"
-        run_cmd "mount $arch_root_part /mnt"
-        run_cmd "mkdir -p /mnt/boot"
-        run_cmd "mount $efi_part /mnt/boot"
+        if ! [ -b "$arch_root_part" ]; then run_cmd "# FATAL: Could not find partition by label 'AOS_ROOT' after creation."; return 1; fi
+        run_cmd "mkfs.ext4 -F $arch_root_part"; run_cmd "mount $arch_root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"
     else
         run_cmd "# Overwrite Mode Enabled"
-        
-        # Define unique labels for the new partitions
-        local efi_label="AOS_EFI"
-        local root_label="AOS_ROOT"
-
+        local efi_label="AOS_EFI"; local root_label="AOS_ROOT"
         run_cmd "sgdisk --zap-all $TARGET_DISK"
         run_cmd "sgdisk --new=1:0:+512M --typecode=1:ef00 --change-name=1:'$efi_label' $TARGET_DISK"
         run_cmd "sgdisk --new=2:0:0 --typecode=2:8300 --change-name=2:'$root_label' $TARGET_DISK"
-        
-        # Inform the kernel about partition table changes
-        run_cmd "partprobe $TARGET_DISK"
-        sleep 2 # Give kernel a moment to create the by-partlabel links
-
-        # Use the reliable /dev/disk/by-partlabel paths
-        local efi_part="/dev/disk/by-partlabel/$efi_label"
-        local root_part="/dev/disk/by-partlabel/$root_label"
-        
+        run_cmd "partprobe $TARGET_DISK"; sleep 2
+        local efi_part="/dev/disk/by-partlabel/$efi_label"; local root_part="/dev/disk/by-partlabel/$root_label"
         run_cmd "# Verifying partitions at $efi_part and $root_part"
-        if ! [ -b "$efi_part" ] || ! [ -b "$root_part" ]; then
-            run_cmd "# FATAL: Could not find partitions by label after creation. Check logs."
-            return 1
-        fi
-
-        run_cmd "mkfs.fat -F32 $efi_part"
-        run_cmd "mkfs.ext4 -F $root_part"
-        run_cmd "mount $root_part /mnt"
-        run_cmd "mkdir -p /mnt/boot"
-        run_cmd "mount $efi_part /mnt/boot"
+        if ! [ -b "$efi_part" ] || ! [ -b "$root_part" ]; then run_cmd "# FATAL: Could not find partitions by label after creation. Check logs."; return 1; fi
+        run_cmd "mkfs.fat -F32 $efi_part"; run_cmd "mkfs.ext4 -F $root_part"; run_cmd "mount $root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"
     fi
     return 0
 }
-
 
 install_base_system() {
     echo "# --- Installing Arch Linux Base System ---" >> "$LOG_FILE"
@@ -212,6 +198,12 @@ echo "--- Enabling essential system services ---"
 systemctl enable gdm.service; systemctl enable NetworkManager.service
 systemctl enable cups.service; systemctl enable bluetooth.service
 if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then systemctl enable timeshift-autosnap.service; fi
+echo "--- Enabling VM Guest Services if installed ---"
+if [ -f /usr/lib/systemd/system/vboxservice.service ]; then systemctl enable vboxservice.service; fi
+if [ -f /usr/lib/systemd/system/vmtoolsd.service ]; then systemctl enable vmtoolsd.service; fi
+if [ -f /usr/lib/systemd/system/qemu-guest-agent.service ]; then systemctl enable qemu-guest-agent.service; fi
+if [ -f /usr/lib/systemd/system/spice-vdagentd.service ]; then systemctl enable spice-vdagentd.service; fi
+# Hyper-V daemons are enabled by default through presets, no need to manually enable.
 echo "--- Chroot configuration complete ---"
 EOF
     chmod +x /mnt/setup_chroot.sh
@@ -292,6 +284,7 @@ main() {
     > "$LOG_FILE"
     
     tui_welcome
+    tui_virtualization_check
 
     while true; do
         local net_status="[INCOMPLETE]" && [ "$NETWORK_CONFIGURED" = true ] && net_status="[COMPLETED]"
