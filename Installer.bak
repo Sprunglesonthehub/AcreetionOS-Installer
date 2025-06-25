@@ -4,10 +4,11 @@
 #  AcreetionOS Arch Linux Installation Script - SIMULATION MODE
 #
 #  Author: AI Assistant
-#  Version: 20.0 (Interactive Installation Progress)
+#  Version: 21.0 (Interactive, Repo & Reboot Fixes)
 #
 #  This version features an interactive progress bar. During installation,
-#  press SPACE to view the live log file.
+#  press SPACE to view the live log file. It also properly configures
+#  custom pacman repositories and provides a safe post-install menu.
 #
 #  It is a SIMULATION and will NOT make any changes to your system.
 # ##################################################################
@@ -24,6 +25,7 @@ NETWORK_CONFIGURED=false
 DISK_CONFIGURED=false
 USER_CONFIGURED=false
 CUSTOM_CONFIGURED=false
+INSTALLATION_COMPLETE=false
 
 # --- Global Configuration Variables ---
 TARGET_DISK=""
@@ -45,7 +47,8 @@ run_cmd() {
     if [ "$SIMULATION" = true ]; then
         echo "[SIM] $@" >> "$LOG_FILE"
     else
-        "$@" >> "$LOG_FILE" 2>&1
+        # Use stdbuf to ensure output is line-buffered for the log
+        stdbuf -oL -eL "$@" >> "$LOG_FILE" 2>&1
     fi
 }
 add_pkg() { local pkg_array_name="$1"; local pkg_to_add="$2"; eval "local arr=(\"\${${pkg_array_name}[@]}\")"; for pkg in "${arr[@]}"; do if [ "$pkg" == "$pkg_to_add" ]; then return; fi; done; eval "${pkg_array_name}+=(\"$pkg_to_add\")"; }
@@ -63,7 +66,7 @@ tui_select_fonts() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --titl
 tui_select_gaming() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Gaming Software" --cancel-label "Back" --separate-output --checklist "Select gaming software to install:" 20 70 3 "steam" "Valve's Steam platform" "off" "lutris" "Open gaming platform" "off" "steam-native-runtime" "For native Linux games on Steam" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; CUSTOM_CONFIGURED=true; }
 tui_select_browsers() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Web Browsers" --cancel-label "Back" --separate-output --checklist "Select browsers to install (requires AUR helper):" 20 70 5 "google-chrome" "Google Chrome (from AUR)" "off" "brave-bin" "Brave Browser (from AUR)" "off" "microsoft-edge-stable-bin" "MS Edge (from AUR)" "off" "librewolf" "Firefox fork focused on privacy" "off" "torguard-bin" "Torguard VPN Client (from AUR)" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; if [ -n "$CHOICES" ]; then add_pkg PACSTRAP_EXTRA_PKGS "base-devel"; add_pkg CHROOT_EXTRA_PKGS "yay-bin"; fi; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; CUSTOM_CONFIGURED=true; }
 tui_select_virtualization() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Virtualization Software" --cancel-label "Back" --separate-output --checklist "Select virtualization software:" 20 70 3 "virtualbox" "Oracle VirtualBox" "off" "virt-manager" "KVM/QEMU frontend (recommended)" "off" "gnome-boxes" "Simple GNOME virtualization app" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; if [ "$CHOICE" == "virtualbox" ]; then add_pkg CHROOT_EXTRA_PKGS "virtualbox-host-dkms"; add_pkg CHROOT_EXTRA_PKGS "virtualbox-guest-iso"; fi; if [ "$CHOICE" == "virt-manager" ]; then add_pkg CHROOT_EXTRA_PKGS "qemu-desktop"; add_pkg CHROOT_EXTRA_PKGS "dnsmasq"; fi; done; CUSTOM_CONFIGURED=true; }
-tui_select_misc() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Miscellaneous Software" --cancel-label "Back" --separate-output --checklist "Select additional software:" 20 70 8 "obs-studio" "Streaming and recording software" "off" "v4l2loopback-dkms" "For virtual webcams (OBS)" "off" "vesktop" "Discord client with better screensharing (AUR)" "off" "discord" "Official Discord client" "off" "libreoffice-fresh" "LibreOffice suite" "off" "timeshift" "System restore utility" "off" "vlc" "Versatile media player" "on" "downgrade" "Tool to downgrade packages (AUR)" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do if [[ "$CHOICE" == "vesktop" || "$CHOICE" == "downgrade" ]]; then add_pkg PACSTRAP_EXTRA_PKGS "base-devel"; add_pkg CHROOT_EXTRA_PKGS "yay-bin"; fi; add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; if [[ "$CHOICES" == *"timeshift"* ]]; then add_pkg CHROOT_EXTRA_PKGS "timeshift-autosnap"; fi; CUSTOM_CONFIGURED=true; }
+tui_select_misc() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Miscellaneous Software" --cancel-label "Back" --separate-output --checklist "Select additional software:" 20 70 8 "obs-studio" "Streaming and recording software" "off" "v4l2loopback-dkms" "For virtual webcams (OBS)" "off" "vesktop" "Discord client with better screensharing (AUR)" "off" "discord" "Official Discord client" "off" "libreoffice-fresh" "LibreOffice suite" "off" "timeshift" "System restore utility" "off" "vlc" "Versatile media player" "on" "downgrade" "Tool to downgrade packages (AUR)" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do if [[ "$CHOICE" == "vesktop" || "$CHOICE" == "downgrade" ]]; then add_pkg PACSTRAP_EXTRA_PKGS "base-devel"; add_pkg CHROOT_EXTRA_PKGS "yay-bin"; fi; add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; if [[ "$CHOICES" == *"timeshift"* ]]; then add_pkg CHROOT_EXTRA_PKGS "timeshift-autosnap"; add_pkg PACSTRAP_EXTRA_PKGS "base-devel"; add_pkg CHROOT_EXTRA_PKGS "yay-bin"; fi; CUSTOM_CONFIGURED=true; }
 
 tui_review_and_install() {
     local install_mode_text="Overwrite" && [ "$DUAL_BOOT_MODE" = true ] && install_mode_text="Dual Boot"
@@ -83,10 +86,17 @@ tui_review_and_install() {
 # --- Installation Engine ---
 
 partition_and_format() { run_cmd "# --- Partitioning and Formatting Disk: $TARGET_DISK ---"; if [ "$DUAL_BOOT_MODE" = true ]; then run_cmd "# Dual Boot Mode Enabled"; local efi_part; efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}'); local win_part; win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}'); run_cmd "# Found EFI partition to reuse: $efi_part"; run_cmd "# Found Windows partition to shrink: $win_part"; run_cmd "# Simulating shrinking Windows partition to free up ${ARCH_PART_SIZE}G"; run_cmd "ntfsresize --no-action --size -${ARCH_PART_SIZE}G $win_part"; run_cmd "# Creating new partition for AcreetionOS in the largest free space..."; run_cmd "sgdisk --largest-new=0 --change-name=0:'AcreetionOS' --typecode=0:8300 $TARGET_DISK"; local arch_root_part; arch_root_part=$(lsblk -plno NAME,PARTLABEL "$TARGET_DISK" | grep 'AcreetionOS' | awk '{print $1}'); run_cmd "# New partition created: $arch_root_part"; run_cmd "mkfs.ext4 -F $arch_root_part"; run_cmd "mount $arch_root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"; else run_cmd "# Overwrite Mode Enabled"; local efi_part="${TARGET_DISK}1"; local root_part="${TARGET_DISK}2"; if [[ $TARGET_DISK == *"nvme"* ]]; then efi_part="${TARGET_DISK}p1"; root_part="${TARGET_DISK}p2"; fi; run_cmd "sgdisk --zap-all $TARGET_DISK"; run_cmd "sgdisk --new=1:0:+512M --typecode=1:ef00 --change-name=1:'EFI System Partition' $TARGET_DISK"; run_cmd "sgdisk --new=2:0:0 --typecode=2:8300 --change-name=2:'AcreetionOS Root' $TARGET_DISK"; run_cmd "mkfs.fat -F32 $efi_part"; run_cmd "mkfs.ext4 -F $root_part"; run_cmd "mount $root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"; fi; }
-install_base_system() { run_cmd "# --- Installing Arch Linux Base System ---"; local base_packages="base $KERNEL_PACKAGE linux-firmware $KERNEL_HEADERS_PACKAGE networkmanager git vim grub efibootmgr"; [ "$DUAL_BOOT_MODE" = true ] && base_packages+=" os-prober"; base_packages+=" ${PACSTRAP_EXTRA_PKGS[@]}"; run_cmd "pacstrap /mnt $base_packages"; run_cmd "# --- Generating fstab ---"; run_cmd "genfstab -U /mnt >> /mnt/etc/fstab"; }
+install_base_system() { run_cmd "# --- Installing Arch Linux Base System ---"; local base_packages="base $KERNEL_PACKAGE linux-firmware $KERNEL_HEADERS_PACKAGE networkmanager git vim grub efibootmgr"; [ "$DUAL_BOOT_MODE" = true ] && base_packages+=" os-prober"; base_packages+=" ${PACSTRAP_EXTRA_PKGS[@]}"; run_cmd "pacstrap -K /mnt $base_packages"; run_cmd "# --- Generating fstab ---"; run_cmd "genfstab -U /mnt >> /mnt/etc/fstab"; }
 configure_chroot() { run_cmd "# --- Configuring System Inside Chroot ---"; local chroot_pkgs_string="${CHROOT_EXTRA_PKGS[*]}"; cat > /mnt/setup_chroot.sh <<'EOF'
 #!/bin/bash
+# Exit on any error
+set -e
+
+# --- Script Parameters ---
 DUAL_BOOT_MODE=$1; HOSTNAME=$2; USERNAME=$3; USER_PASSWORD=$4; shift 4; CHROOT_PKGS_STRING="$@"
+
+# --- System Configuration ---
+echo "--- Configuring base system (timezone, locale, time) ---"
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime; hwclock --systohc
 sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen; locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
@@ -96,35 +106,85 @@ cat > /etc/hosts <<HOSTS_EOF
 ::1         localhost
 127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
+
+# --- Add Custom Repositories ---
+echo "--- Adding AcreetionOS custom repositories ---"
+cat >> /etc/pacman.conf <<PACMAN_EOF
+
+#[acreetionOSREPO]
+#SigLevel = Optional
+#Server = https://darrengames.ddns.net:1500/repo/\$arch
+
+[acreetionOSREPO-main]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/repo-main/\$arch
+
+[personal]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/personal
+PACMAN_EOF
+
+echo "--- Synchronizing new repository databases ---"
+pacman -Sy
+
+# --- User & Security Setup ---
+echo "--- Setting up user accounts and sudo ---"
 passwd -l root
 useradd -m -G wheel -s /bin/bash "${USERNAME}"; echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+# --- Bootloader Setup ---
+echo "--- Installing and configuring GRUB bootloader ---"
 if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; fi
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
 grub-mkconfig -o /boot/grub/grub.cfg
-CORE_PKGS="cinnamon gdm gnome-terminal firefox nano webapp-manager vlc loupe xarchiver timeshift unzip gedit gnome-disk-utility seahorse gnome-calculator gnome-system-monitor wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
+
+# --- Desktop & Package Installation ---
+echo "--- Installing core desktop environment and software ---"
+CORE_PKGS="cinnamon gdm gnome-terminal firefox webapp-manager wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
 pacman -S --noconfirm --needed ${CORE_PKGS}
+
+echo "--- Installing user-selected optional packages ---"
 if [ -n "$CHROOT_PKGS_STRING" ]; then
     REPO_PKGS=(); AUR_PKGS=()
-    for pkg in $CHROOT_PKGS_STRING; do if pacman -Si "$pkg" &> /dev/null; then REPO_PKGS+=("$pkg"); else AUR_PKGS+=("$pkg"); fi; done
-    if [ ${#REPO_PKGS[@]} -gt 0 ]; then pacman -S --noconfirm --needed "${REPO_PKGS[@]}"; fi
+    for pkg in $CHROOT_PKGS_STRING; do
+        if pacman -Si "$pkg" &> /dev/null; then
+            REPO_PKGS+=("$pkg")
+        else
+            AUR_PKGS+=("$pkg")
+        fi
+    done
+
+    if [ ${#REPO_PKGS[@]} -gt 0 ]; then
+        echo "Installing repository packages: ${REPO_PKGS[*]}"
+        pacman -S --noconfirm --needed "${REPO_PKGS[@]}"
+    fi
+
     if [ ${#AUR_PKGS[@]} -gt 0 ]; then
-        if ! command -v yay &> /dev/null; then echo "--- Simulating yay install ---"; pacman -S --noconfirm --needed git base-devel; fi
-        su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"
+        echo "Installing AUR packages: ${AUR_PKGS[*]}"
+        if command -v yay &> /dev/null; then
+            su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"
+        else
+            echo "WARNING: 'yay' command not found. Cannot install AUR packages."
+            echo "Ensure 'yay-bin' is available in one of your configured repositories."
+        fi
     fi
 fi
+
+# --- Enable System Services ---
+echo "--- Enabling essential system services ---"
 systemctl enable gdm.service; systemctl enable NetworkManager.service
 systemctl enable cups.service; systemctl enable bluetooth.service
-if [ -f /usr/lib/systemd/system/timeshift-systemd-timer.service ]; then systemctl enable timeshift-systemd-timer.service; fi
+# Conditionally enable timeshift timer if it was installed
+if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then systemctl enable timeshift-autosnap.service; fi
+
+echo "--- Chroot configuration complete ---"
 EOF
 chmod +x /mnt/setup_chroot.sh; run_cmd "arch-chroot /mnt /setup_chroot.sh '${DUAL_BOOT_MODE}' '${HOSTNAME}' '${USERNAME}' '${USER_PASSWORD}' '${chroot_pkgs_string}'"; run_cmd "rm /mnt/setup_chroot.sh"; }
 
 # --- New Interactive Installation ---
 
 run_installation_engine() {
-    # This function runs in the background.
-    # It updates progress files that the TUI reads.
-    # All command output is redirected to the main log file.
     (
         echo 10 > "$PROGRESS_PERCENT_FILE"; echo "Partitioning disk..." > "$PROGRESS_MESSAGE_FILE"
         partition_and_format
@@ -142,33 +202,27 @@ run_installation_engine() {
 
 tui_installation_progress() {
     local install_pid=$1
-    
-    # Give the background process a moment to start and write the first status
-    sleep 1
+    sleep 1 # Give the background process a moment to start
 
     while ps -p $install_pid > /dev/null; do
         local percent=${PERCENT:-0}
         local message=${MESSAGE:-"Starting..."}
         
-        # Read the latest progress from our temporary files
         [ -f "$PROGRESS_PERCENT_FILE" ] && percent=$(cat "$PROGRESS_PERCENT_FILE")
         [ -f "$PROGRESS_MESSAGE_FILE" ] && message=$(cat "$PROGRESS_MESSAGE_FILE")
 
-        # The subshell pipes the progress info to the gauge
         (
             echo "$percent"
             echo "### $message ###"
-            echo "Press SPACE to view live log"
+            echo "Press SPACE to view live installation log"
         ) | dialog --backtitle "AcreetionOS Installer" --title "Installation in Progress" --gauge "Please wait..." 12 70 0
         
-        # Listen for a key press for 0.5 seconds
         read -s -n 1 -t 0.5 key
         if [[ "$key" == ' ' ]]; then
-            dialog --backtitle "AcreetionOS Installer" --title "Live Installation Log" --tailbox "$LOG_FILE" 40 120
+            dialog --backtitle "AcreetionOS Installer" --title "Live Installation Log ($LOG_FILE)" --tailbox "$LOG_FILE" 40 120
         fi
     done
 
-    # Show the final 100% completion
     echo 100 | dialog --backtitle "AcreetionOS Installer" --title "Installation in Progress" --gauge "Complete!" 10 70 100
     sleep 1
 }
@@ -178,9 +232,6 @@ main() {
     if ! command -v dialog &> /dev/null; then echo "Error: The 'dialog' package is required." >&2; exit 1; fi
     > "$LOG_FILE"
     
-    # Add core packages that should always be installed
-    add_pkg CHROOT_EXTRA_PKGS "fastfetch nano webapp-manager vlc loupe xarchiver timeshift timeshift-autosnap unzip gedit gnome-disk-utility seahorse gnome-calculator gnome-system-monitor wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons"
-
     tui_welcome
 
     while true; do
@@ -189,58 +240,86 @@ main() {
         local user_status="[INCOMPLETE]" && [ "$USER_CONFIGURED" = true ] && user_status="[COMPLETED]"
         local custom_status="[DEFAULT]" && [ "$CUSTOM_CONFIGURED" = true ] && custom_status="[CONFIGURED]"
         
+        local menu_options=(
+            1 "Configure Network                 $net_status"
+            2 "Configure Disk                  $disk_status"
+            3 "Setup User & Hostname           $user_status"
+            4 "(Optional) Software & Customization $custom_status"
+            5 "Review and Install"
+            6 "Quit Installer"
+        )
+        if [ "$INSTALLATION_COMPLETE" = true ]; then
+            menu_options[1]="Configure Disk                  [LOCKED]"
+            menu_options[4]="Installation Complete - Reboot or Quit"
+        fi
+
         CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Main Menu" --cancel-label "Exit" \
-                        --menu "Complete the steps in order:" 20 60 6 \
-                        1 "Configure Network                 $net_status" \
-                        2 "Configure Disk                  $disk_status" \
-                        3 "Setup User & Hostname           $user_status" \
-                        4 "(Optional) Software & Customization $custom_status" \
-                        5 "Review and Install" \
-                        6 "Quit Installer" 2>&1 >/dev/tty)
-        [ $? -ne 0 ] && CHOICE=6
+                        --menu "Complete the steps in order. After install, you may reboot." 20 70 6 \
+                        "${menu_options[@]}" 2>&1 >/dev/tty)
+        
+        # If user presses ESC or selects Exit/Quit
+        if [ $? -ne 0 ]; then
+            CHOICE=6
+        fi
 
         case "$CHOICE" in
             1) tui_network ;;
-            2) tui_disk ;;
+            2)
+                if [ "$INSTALLATION_COMPLETE" = true ]; then
+                    dialog --backtitle "AcreetionOS Installer" --title "Option Locked" --msgbox "The disk has already been partitioned and installed to. This option is now locked to prevent data loss." 8 60
+                else
+                    tui_disk
+                fi
+                ;;
             3) tui_user ;;
             4) tui_customization_menu ;;
             5)
-                if ! $NETWORK_CONFIGURED || ! $DISK_CONFIGURED || ! $USER_CONFIGURED; then
+                if [ "$INSTALLATION_COMPLETE" = true ]; then
+                    dialog --backtitle "AcreetionOS Installer" --title "Already Done" --msgbox "Installation is already complete. Please choose 'Quit Installer' and select 'Reboot' from the final prompt." 8 70
+                elif ! $NETWORK_CONFIGURED || ! $DISK_CONFIGURED || ! $USER_CONFIGURED; then
                     dialog --backtitle "AcreetionOS Installer" --title "Error" --msgbox "Please complete all mandatory steps (1-3) before proceeding." 8 50
                 else
-                    tui_review_and_install
-                    [ $? -eq 0 ] && break
+                    if tui_review_and_install; then
+                        # --- Start Interactive Installation ---
+                        clear
+                        echo "Starting installation... Press SPACE during progress bar to view logs."
+                        echo "Details are also being logged to $LOG_FILE"
+
+                        PROGRESS_PERCENT_FILE=$(mktemp)
+                        PROGRESS_MESSAGE_FILE=$(mktemp)
+                        trap "rm -f '$PROGRESS_PERCENT_FILE' '$PROGRESS_MESSAGE_FILE'" EXIT
+
+                        run_installation_engine &
+                        INSTALL_PID=$!
+                        tui_installation_progress $INSTALL_PID
+                        trap - EXIT # Clear the trap
+
+                        INSTALLATION_COMPLETE=true
+                        dialog --backtitle "AcreetionOS Installer" --title "Complete!" --msgbox "AcreetionOS installation finished successfully!\n\nYou can now reboot or quit to a shell." 8 60
+                    fi
                 fi
                 ;;
             6)
-                dialog --backtitle "AcreetionOS Installer" --title "Quit" --yesno "Are you sure you want to quit the installer?" 6 40
-                [ $? -eq 0 ] && { clear; exit 0; }
+                local prompt_text="Are you sure you want to quit the installer?"
+                if [ "$INSTALLATION_COMPLETE" = true ]; then
+                    prompt_text="The installation is complete. Would you like to reboot the system now?"
+                    dialog --backtitle "AcreetionOS Installer" --title "Reboot System?" --yesno "$prompt_text" 8 60
+                    if [ $? -eq 0 ]; then # Yes, reboot
+                        run_cmd "umount -R /mnt"
+                        run_cmd "reboot"
+                        clear; exit 0
+                    else # No, exit to shell
+                        dialog --backtitle "AcreetionOS Installer" --title "Exiting" --infobox "Exiting to shell..." 4 30 ; sleep 1
+                        clear; exit 0
+                    fi
+                else
+                    dialog --backtitle "AcreetionOS Installer" --title "Quit" --yesno "$prompt_text" 6 40
+                    [ $? -eq 0 ] && { clear; exit 0; }
+                fi
                 ;;
         esac
     done
-
-    # --- Start Interactive Installation ---
-    clear
-    echo "Starting installation... Press SPACE during progress bar to view logs."
-    echo "Details are also being logged to $LOG_FILE"
-
-    # Create temporary files for progress communication
-    PROGRESS_PERCENT_FILE=$(mktemp)
-    PROGRESS_MESSAGE_FILE=$(mktemp)
-    # Ensure temporary files are cleaned up on exit
-    trap "rm -f '$PROGRESS_PERCENT_FILE' '$PROGRESS_MESSAGE_FILE'" EXIT
-
-    # Run the installation in the background and get its PID
-    run_installation_engine &
-    INSTALL_PID=$!
-
-    # Run the interactive TUI in the foreground
-    tui_installation_progress $INSTALL_PID
-
-    dialog --backtitle "AcreetionOS Installer" --title "Complete!" --msgbox "AcreetionOS installation finished successfully!\n\nThe system will now reboot." 8 60
-    run_cmd "umount -R /mnt"
-    run_cmd "reboot"
-    clear
 }
 
+# --- Start Script Execution ---
 main "$@"

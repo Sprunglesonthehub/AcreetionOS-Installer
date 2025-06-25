@@ -4,11 +4,10 @@
 #  AcreetionOS Arch Linux Installation Script - SIMULATION MODE
 #
 #  Author: AI Assistant
-#  Version: 21.0 (Interactive, Repo & Reboot Fixes)
+#  Version: 23.0 (Redesigned Post-Install Menu)
 #
-#  This version features an interactive progress bar. During installation,
-#  press SPACE to view the live log file. It also properly configures
-#  custom pacman repositories and provides a safe post-install menu.
+#  Features a live package installation view and a polished
+#  post-install menu with options to reboot, shutdown, or chroot.
 #
 #  It is a SIMULATION and will NOT make any changes to your system.
 # ##################################################################
@@ -44,16 +43,19 @@ KERNEL_HEADERS_PACKAGE="linux-headers"
 
 # --- Helper Functions ---
 run_cmd() {
+    # stdbuf ensures output is line-buffered for the log, making tailbox more responsive
     if [ "$SIMULATION" = true ]; then
         echo "[SIM] $@" >> "$LOG_FILE"
+        # Simulate a short delay for commands
+        sleep 0.1
     else
-        # Use stdbuf to ensure output is line-buffered for the log
         stdbuf -oL -eL "$@" >> "$LOG_FILE" 2>&1
     fi
+    return $?
 }
 add_pkg() { local pkg_array_name="$1"; local pkg_to_add="$2"; eval "local arr=(\"\${${pkg_array_name}[@]}\")"; for pkg in "${arr[@]}"; do if [ "$pkg" == "$pkg_to_add" ]; then return; fi; done; eval "${pkg_array_name}+=(\"$pkg_to_add\")"; }
 
-# --- TUI Functions (Unchanged from previous version) ---
+# --- TUI Functions ---
 tui_welcome() { dialog --backtitle "AcreetionOS Installer" --title "Welcome" --msgbox "Welcome to the AcreetionOS Installer.\n\nThis script will guide you through installing Arch Linux with the AcreetionOS profile (Cinnamon DE).\n\nCurrently in SIMULATION mode. No changes will be made. Commands will be logged to '$LOG_FILE'." 14 70; }
 tui_network() { while true; do CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Network Configuration" --cancel-label "Back" --menu "Select an option:" 15 55 3 1 "Connect to Wi-Fi" 2 "Use Wired Ethernet (or check status)" 3 "Continue (Already Connected)" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; case "$CHOICE" in 1) dialog --backtitle "AcreetionOS Installer" --infobox "Scanning for Wi-Fi networks..." 4 40; sleep 1; local networks=("AcreetionWiFi" "Strong" "CinnamonNet" "Medium" "Public WiFi" "Weak"); WIFI_CHOICE=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --menu "Choose a network:" 15 50 4 "${networks[@]}" 2>&1 >/dev/tty); [ $? -ne 0 ] && continue; WIFI_PASS=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --passwordbox "Enter password for $WIFI_CHOICE:" 8 40 2>&1 >/dev/tty); [ $? -ne 0 ] && continue; dialog --backtitle "AcreetionOS Installer" --infobox "Connecting..." 4 40; run_cmd "ping -c 1 archlinux.org"; dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30; run_cmd "timedatectl set-ntp true"; NETWORK_CONFIGURED=true; return;; 2) dialog --backtitle "AcreetionOS Installer" --infobox "Checking connection..." 4 40; run_cmd "ping -c 1 archlinux.org"; dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30; run_cmd "timedatectl set-ntp true"; NETWORK_CONFIGURED=true; return;; 3) NETWORK_CONFIGURED=true; return;; esac; done; }
 tui_windows_backup() { mapfile -t usb_devices < <(lsblk -dno NAME,RM | awk '$2==1 {print "/dev/"$1}'); if [ ${#usb_devices[@]} -eq 0 ]; then dialog --backtitle "AcreetionOS Installer" --title "Error" --msgbox "No removable USB drives found. Cannot perform backup." 8 50; return 1; fi; local -a usb_options=(); for dev_path in "${usb_devices[@]}"; do usb_options+=("$dev_path" "$(lsblk -dno SIZE,MODEL "$dev_path")"); done; local backup_usb; backup_usb=$(dialog --backtitle "AcreetionOS Installer" --title "Select Backup USB Drive" --cancel-label "Cancel Backup" --radiolist "Select a USB drive to use for the backup:" 20 70 5 "${usb_options[@]}" "on" 2>&1 >/dev/tty); [ $? -ne 0 ] && return 1; dialog --backtitle "AcreetionOS Installer" --title "!!! WARNING !!!" --yesno "ALL DATA on the selected USB drive ($backup_usb) will be DESTROYED to create the backup image.\n\nAre you absolutely sure you want to proceed?" 10 70; [ $? -ne 0 ] && return 1; local win_partition; win_partition=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1{print $1}'); ( echo 10; echo "### Formatting USB drive $backup_usb... ###"; run_cmd "mkfs.ext4 -F $backup_usb"; sleep 2; echo 25; echo "### Mounting USB drive... ###"; run_cmd "mkdir -p /mnt/backup"; run_cmd "mount $backup_usb /mnt/backup"; sleep 2; echo 50; echo "### Cloning Windows partition (this would take a long time)... ###"; run_cmd "ntfsclone --save-image -o - $win_partition | gzip -c > /mnt/backup/windows_backup.img.gz"; sleep 3; echo 90; echo "### Unmounting USB drive... ###"; run_cmd "umount /mnt/backup"; sleep 2; echo 100; echo "### Backup Simulation Complete! ###"; sleep 1 ) | dialog --backtitle "AcreetionOS Installer" --title "Simulating Backup" --gauge "Please wait..." 10 70 0; dialog --backtitle "AcreetionOS Installer" --title "Backup Complete" --msgbox "The simulation of the Windows backup is complete." 8 60; return 0; }
@@ -86,16 +88,50 @@ tui_review_and_install() {
 # --- Installation Engine ---
 
 partition_and_format() { run_cmd "# --- Partitioning and Formatting Disk: $TARGET_DISK ---"; if [ "$DUAL_BOOT_MODE" = true ]; then run_cmd "# Dual Boot Mode Enabled"; local efi_part; efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}'); local win_part; win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}'); run_cmd "# Found EFI partition to reuse: $efi_part"; run_cmd "# Found Windows partition to shrink: $win_part"; run_cmd "# Simulating shrinking Windows partition to free up ${ARCH_PART_SIZE}G"; run_cmd "ntfsresize --no-action --size -${ARCH_PART_SIZE}G $win_part"; run_cmd "# Creating new partition for AcreetionOS in the largest free space..."; run_cmd "sgdisk --largest-new=0 --change-name=0:'AcreetionOS' --typecode=0:8300 $TARGET_DISK"; local arch_root_part; arch_root_part=$(lsblk -plno NAME,PARTLABEL "$TARGET_DISK" | grep 'AcreetionOS' | awk '{print $1}'); run_cmd "# New partition created: $arch_root_part"; run_cmd "mkfs.ext4 -F $arch_root_part"; run_cmd "mount $arch_root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"; else run_cmd "# Overwrite Mode Enabled"; local efi_part="${TARGET_DISK}1"; local root_part="${TARGET_DISK}2"; if [[ $TARGET_DISK == *"nvme"* ]]; then efi_part="${TARGET_DISK}p1"; root_part="${TARGET_DISK}p2"; fi; run_cmd "sgdisk --zap-all $TARGET_DISK"; run_cmd "sgdisk --new=1:0:+512M --typecode=1:ef00 --change-name=1:'EFI System Partition' $TARGET_DISK"; run_cmd "sgdisk --new=2:0:0 --typecode=2:8300 --change-name=2:'AcreetionOS Root' $TARGET_DISK"; run_cmd "mkfs.fat -F32 $efi_part"; run_cmd "mkfs.ext4 -F $root_part"; run_cmd "mount $root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"; fi; }
-install_base_system() { run_cmd "# --- Installing Arch Linux Base System ---"; local base_packages="base $KERNEL_PACKAGE linux-firmware $KERNEL_HEADERS_PACKAGE networkmanager git vim grub efibootmgr"; [ "$DUAL_BOOT_MODE" = true ] && base_packages+=" os-prober"; base_packages+=" ${PACSTRAP_EXTRA_PKGS[@]}"; run_cmd "pacstrap -K /mnt $base_packages"; run_cmd "# --- Generating fstab ---"; run_cmd "genfstab -U /mnt >> /mnt/etc/fstab"; }
-configure_chroot() { run_cmd "# --- Configuring System Inside Chroot ---"; local chroot_pkgs_string="${CHROOT_EXTRA_PKGS[*]}"; cat > /mnt/setup_chroot.sh <<'EOF'
+
+install_base_system() {
+    echo "# --- Installing Arch Linux Base System ---" >> "$LOG_FILE"
+    local base_packages="base $KERNEL_PACKAGE linux-firmware $KERNEL_HEADERS_PACKAGE networkmanager git vim grub efibootmgr"
+    [ "$DUAL_BOOT_MODE" = true ] && base_packages+=" os-prober"
+    base_packages+=" ${PACSTRAP_EXTRA_PKGS[@]}"
+
+    local cmd="pacstrap -K /mnt $base_packages"
+    if [ "$SIMULATION" = true ]; then
+        echo "[SIM] $cmd" >> "$LOG_FILE"
+        (
+            echo "==> Creating install root at /mnt"
+            sleep 1
+            for pkg in $base_packages; do
+                echo ":: Synchronizing package databases..."
+                sleep 0.2; echo " resolving dependencies..."; sleep 0.2; echo " looking for conflicting packages..."; sleep 0.2; echo ""
+                echo "Packages (1) $pkg-1.0-1"
+                echo ""; echo "Total Download Size:    10.00 MiB"; echo "Total Installed Size:  100.00 MiB"; echo ""
+                echo ":: Proceed with installation? [Y/n] Y"; echo ":: Retrieving packages..."
+                echo " $pkg-1.0-1-x86_64               10.0 MiB  1500 KiB/s 00:01 [######################] 100%"
+                sleep 0.5
+                echo "(1/1) checking keys in keyring                               [######################] 100%"
+                echo "(1/1) checking package integrity                             [######################] 100%"
+                echo "(1/1) loading package files                                  [######################] 100%"
+                echo "(1/1) checking for file conflicts                            [######################] 100%"
+                echo ":: Processing package changes..."; echo "(1/1) installing $pkg                                        [######################] 100%"
+                sleep 0.3
+            done
+            echo "==> Installation successful"
+        ) | dialog --backtitle "AcreetionOS Installer" --title "Installing Base System (Simulation)" --programbox 30 100
+        return 0
+    else
+        stdbuf -oL -eL $cmd 2>&1 | tee -a "$LOG_FILE" | dialog --backtitle "AcreetionOS Installer" --title "Installing Base System (Live)" --programbox 30 100
+        return ${PIPESTATUS[0]}
+    fi
+}
+
+configure_chroot() {
+    run_cmd "# --- Preparing Chroot Configuration Script ---"
+    local chroot_pkgs_string="${CHROOT_EXTRA_PKGS[*]}"
+    cat > /mnt/setup_chroot.sh <<'EOF'
 #!/bin/bash
-# Exit on any error
 set -e
-
-# --- Script Parameters ---
 DUAL_BOOT_MODE=$1; HOSTNAME=$2; USERNAME=$3; USER_PASSWORD=$4; shift 4; CHROOT_PKGS_STRING="$@"
-
-# --- System Configuration ---
 echo "--- Configuring base system (timezone, locale, time) ---"
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime; hwclock --systohc
 sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen; locale-gen
@@ -106,125 +142,125 @@ cat > /etc/hosts <<HOSTS_EOF
 ::1         localhost
 127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
-
-# --- Add Custom Repositories ---
 echo "--- Adding AcreetionOS custom repositories ---"
 cat >> /etc/pacman.conf <<PACMAN_EOF
 
 #[acreetionOSREPO]
 #SigLevel = Optional
 #Server = https://darrengames.ddns.net:1500/repo/\$arch
-
 [acreetionOSREPO-main]
 SigLevel = Never
 Server = https://darrengames.ddns.net:1500/repo-main/\$arch
-
 [personal]
 SigLevel = Never
 Server = https://darrengames.ddns.net:1500/personal
 PACMAN_EOF
-
-echo "--- Synchronizing new repository databases ---"
-pacman -Sy
-
-# --- User & Security Setup ---
+echo "--- Synchronizing new repository databases ---"; pacman -Sy
 echo "--- Setting up user accounts and sudo ---"
 passwd -l root
 useradd -m -G wheel -s /bin/bash "${USERNAME}"; echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-
-# --- Bootloader Setup ---
 echo "--- Installing and configuring GRUB bootloader ---"
 if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; fi
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
 grub-mkconfig -o /boot/grub/grub.cfg
-
-# --- Desktop & Package Installation ---
 echo "--- Installing core desktop environment and software ---"
 CORE_PKGS="cinnamon gdm gnome-terminal firefox webapp-manager wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
 pacman -S --noconfirm --needed ${CORE_PKGS}
-
 echo "--- Installing user-selected optional packages ---"
 if [ -n "$CHROOT_PKGS_STRING" ]; then
     REPO_PKGS=(); AUR_PKGS=()
-    for pkg in $CHROOT_PKGS_STRING; do
-        if pacman -Si "$pkg" &> /dev/null; then
-            REPO_PKGS+=("$pkg")
-        else
-            AUR_PKGS+=("$pkg")
-        fi
-    done
-
-    if [ ${#REPO_PKGS[@]} -gt 0 ]; then
-        echo "Installing repository packages: ${REPO_PKGS[*]}"
-        pacman -S --noconfirm --needed "${REPO_PKGS[@]}"
-    fi
-
-    if [ ${#AUR_PKGS[@]} -gt 0 ]; then
-        echo "Installing AUR packages: ${AUR_PKGS[*]}"
-        if command -v yay &> /dev/null; then
-            su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"
-        else
-            echo "WARNING: 'yay' command not found. Cannot install AUR packages."
-            echo "Ensure 'yay-bin' is available in one of your configured repositories."
-        fi
-    fi
+    for pkg in $CHROOT_PKGS_STRING; do if pacman -Si "$pkg" &> /dev/null; then REPO_PKGS+=("$pkg"); else AUR_PKGS+=("$pkg"); fi; done
+    if [ ${#REPO_PKGS[@]} -gt 0 ]; then echo "Installing repository packages: ${REPO_PKGS[*]}"; pacman -S --noconfirm --needed "${REPO_PKGS[@]}"; fi
+    if [ ${#AUR_PKGS[@]} -gt 0 ]; then echo "Installing AUR packages: ${AUR_PKGS[*]}"; if command -v yay &> /dev/null; then su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"; else echo "WARNING: 'yay' not found for AUR packages."; fi; fi
 fi
-
-# --- Enable System Services ---
 echo "--- Enabling essential system services ---"
 systemctl enable gdm.service; systemctl enable NetworkManager.service
 systemctl enable cups.service; systemctl enable bluetooth.service
-# Conditionally enable timeshift timer if it was installed
 if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then systemctl enable timeshift-autosnap.service; fi
-
 echo "--- Chroot configuration complete ---"
 EOF
-chmod +x /mnt/setup_chroot.sh; run_cmd "arch-chroot /mnt /setup_chroot.sh '${DUAL_BOOT_MODE}' '${HOSTNAME}' '${USERNAME}' '${USER_PASSWORD}' '${chroot_pkgs_string}'"; run_cmd "rm /mnt/setup_chroot.sh"; }
+    chmod +x /mnt/setup_chroot.sh
+    run_cmd "# --- Executing Chroot Configuration ---"
+    local cmd="arch-chroot /mnt /setup_chroot.sh '${DUAL_BOOT_MODE}' '${HOSTNAME}' '${USERNAME}' '${USER_PASSWORD}' '${chroot_pkgs_string}'"
 
-# --- New Interactive Installation ---
-
-run_installation_engine() {
-    (
-        echo 10 > "$PROGRESS_PERCENT_FILE"; echo "Partitioning disk..." > "$PROGRESS_MESSAGE_FILE"
-        partition_and_format
-
-        echo 40 > "$PROGRESS_PERCENT_FILE"; echo "Installing base system and packages (this may take a while)..." > "$PROGRESS_MESSAGE_FILE"
-        install_base_system
-
-        echo 80 > "$PROGRESS_PERCENT_FILE"; echo "Configuring the new system (chroot)..." > "$PROGRESS_MESSAGE_FILE"
-        configure_chroot
-
-        echo 100 > "$PROGRESS_PERCENT_FILE"; echo "Finalizing..." > "$PROGRESS_MESSAGE_FILE"
-        sleep 2
-    ) >> "$LOG_FILE" 2>&1
+    if [ "$SIMULATION" = true ]; then
+        echo "[SIM] $cmd" >> "$LOG_FILE"
+        ( sleep 2; echo "--- SIMULATING CHROOT CONFIG ---" >> "$LOG_FILE"; sleep 2; echo "--- SIMULATING PACMAN ---" >> "$LOG_FILE"; sleep 3; echo "--- Chroot simulation complete ---" >> "$LOG_FILE" ) &
+    else
+        stdbuf -oL -eL $cmd >> "$LOG_FILE" 2>&1 &
+    fi
+    local chroot_pid=$!
+    dialog --backtitle "AcreetionOS Installer" --title "Configuring System (Live Log)" --tailboxbg "$LOG_FILE" 30 100
+    wait $chroot_pid
+    local exit_code=$?
+    sleep 2
+    run_cmd "rm /mnt/setup_chroot.sh"
+    return $exit_code
 }
 
-tui_installation_progress() {
-    local install_pid=$1
-    sleep 1 # Give the background process a moment to start
+run_full_installation() {
+    clear
+    ( echo 10; echo "### Partitioning and formatting disk... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 1/4" --gauge "Please wait..." 10 70 0
+    partition_and_format; [ $? -ne 0 ] && return 1
 
-    while ps -p $install_pid > /dev/null; do
-        local percent=${PERCENT:-0}
-        local message=${MESSAGE:-"Starting..."}
-        
-        [ -f "$PROGRESS_PERCENT_FILE" ] && percent=$(cat "$PROGRESS_PERCENT_FILE")
-        [ -f "$PROGRESS_MESSAGE_FILE" ] && message=$(cat "$PROGRESS_MESSAGE_FILE")
+    ( echo 30; echo "### Generating fstab... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 2/4" --gauge "Please wait..." 10 70 0
+    run_cmd "genfstab -U /mnt >> /mnt/etc/fstab"; [ $? -ne 0 ] && return 1
 
-        (
-            echo "$percent"
-            echo "### $message ###"
-            echo "Press SPACE to view live installation log"
-        ) | dialog --backtitle "AcreetionOS Installer" --title "Installation in Progress" --gauge "Please wait..." 12 70 0
+    dialog --backtitle "AcreetionOS Installer" --title "Installation Step 3/4" --infobox "Starting base system installation...\n\nThis will show the live package installation from pacstrap." 8 70
+    sleep 2
+    install_base_system; [ $? -ne 0 ] && return 1
+
+    dialog --backtitle "AcreetionOS Installer" --title "Installation Step 4/4" --infobox "Configuring the new system (chroot)...\n\nThis will show the live package installation from pacman and other setup tasks." 8 70
+    sleep 2
+    configure_chroot; [ $? -ne 0 ] && return 1
+
+    return 0
+}
+
+tui_post_install_menu() {
+    while true; do
+        CHOICE=$(dialog --backtitle "AcreetionOS Installer - Complete" \
+                        --title "Installation Complete" \
+                        --default-item "REBOOT" \
+                        --cancel-label "Shell" \
+                        --menu "What would you like to do next?\n\nIt is recommended to reboot. Remember to remove the installation medium (USB/CD) when the system powers down." \
+                        16 75 4 \
+                        "REBOOT"   "Reboot the computer into your new system" \
+                        "SHUTDOWN" "Power off the computer completely" \
+                        "CHROOT"   "Enter the new system (for advanced tasks)" \
+                        "MAIN_MENU"  "Return to the (locked) main menu" \
+                        2>&1 >/dev/tty)
         
-        read -s -n 1 -t 0.5 key
-        if [[ "$key" == ' ' ]]; then
-            dialog --backtitle "AcreetionOS Installer" --title "Live Installation Log ($LOG_FILE)" --tailbox "$LOG_FILE" 40 120
+        if [ $? -ne 0 ]; then
+            dialog --title "Exit" --infobox "Exiting to command line shell..." 4 40; sleep 1; clear; exit 0
         fi
-    done
 
-    echo 100 | dialog --backtitle "AcreetionOS Installer" --title "Installation in Progress" --gauge "Complete!" 10 70 100
-    sleep 1
+        case "$CHOICE" in
+            REBOOT)
+                dialog --title "Rebooting" --infobox "Unmounting filesystems and preparing for reboot..." 5 50
+                run_cmd "umount -R /mnt"; sleep 1; run_cmd "reboot"; clear; exit 0
+                ;;
+            SHUTDOWN)
+                dialog --title "Shutting Down" --infobox "Unmounting filesystems and preparing for shutdown..." 5 50
+                run_cmd "umount -R /mnt"; sleep 1; run_cmd "poweroff"; clear; exit 0
+                ;;
+            CHROOT)
+                dialog --title "Entering Chroot" --infobox "Preparing to enter your new installation...\n\nType 'exit' when you are finished to return to this menu." 8 60; sleep 2; clear
+                if [ "$SIMULATION" = true ]; then
+                    run_cmd "arch-chroot /mnt"
+                    dialog --title "Chroot Simulation" --msgbox "You are now in a simulated chroot environment.\n\nPress OK to 'exit' and return to the menu." 10 50
+                else
+                    exec 3>&1 4>&2 1>/dev/tty 2>/dev/tty
+                    arch-chroot /mnt
+                    exec 1>&3 3>&- 2>&4 4>&-
+                fi
+                ;;
+            MAIN_MENU)
+                return
+                ;;
+        esac
+    done
 }
 
 # --- Main TUI Loop ---
@@ -246,21 +282,18 @@ main() {
             3 "Setup User & Hostname           $user_status"
             4 "(Optional) Software & Customization $custom_status"
             5 "Review and Install"
-            6 "Quit Installer"
+            6 "Quit / Post-Install Options"
         )
         if [ "$INSTALLATION_COMPLETE" = true ]; then
             menu_options[1]="Configure Disk                  [LOCKED]"
-            menu_options[4]="Installation Complete - Reboot or Quit"
+            menu_options[4]="Installation Complete"
         fi
 
         CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Main Menu" --cancel-label "Exit" \
                         --menu "Complete the steps in order. After install, you may reboot." 20 70 6 \
                         "${menu_options[@]}" 2>&1 >/dev/tty)
         
-        # If user presses ESC or selects Exit/Quit
-        if [ $? -ne 0 ]; then
-            CHOICE=6
-        fi
+        if [ $? -ne 0 ]; then CHOICE=6; fi
 
         case "$CHOICE" in
             1) tui_network ;;
@@ -275,45 +308,26 @@ main() {
             4) tui_customization_menu ;;
             5)
                 if [ "$INSTALLATION_COMPLETE" = true ]; then
-                    dialog --backtitle "AcreetionOS Installer" --title "Already Done" --msgbox "Installation is already complete. Please choose 'Quit Installer' and select 'Reboot' from the final prompt." 8 70
+                    dialog --backtitle "AcreetionOS Installer" --title "Already Done" --msgbox "Installation is already complete. You can access post-install options from the 'Quit' menu item." 8 70
                 elif ! $NETWORK_CONFIGURED || ! $DISK_CONFIGURED || ! $USER_CONFIGURED; then
                     dialog --backtitle "AcreetionOS Installer" --title "Error" --msgbox "Please complete all mandatory steps (1-3) before proceeding." 8 50
                 else
                     if tui_review_and_install; then
-                        # --- Start Interactive Installation ---
-                        clear
-                        echo "Starting installation... Press SPACE during progress bar to view logs."
-                        echo "Details are also being logged to $LOG_FILE"
-
-                        PROGRESS_PERCENT_FILE=$(mktemp)
-                        PROGRESS_MESSAGE_FILE=$(mktemp)
-                        trap "rm -f '$PROGRESS_PERCENT_FILE' '$PROGRESS_MESSAGE_FILE'" EXIT
-
-                        run_installation_engine &
-                        INSTALL_PID=$!
-                        tui_installation_progress $INSTALL_PID
-                        trap - EXIT # Clear the trap
-
-                        INSTALLATION_COMPLETE=true
-                        dialog --backtitle "AcreetionOS Installer" --title "Complete!" --msgbox "AcreetionOS installation finished successfully!\n\nYou can now reboot or quit to a shell." 8 60
+                        run_full_installation
+                        if [ $? -eq 0 ]; then
+                            INSTALLATION_COMPLETE=true
+                            dialog --backtitle "AcreetionOS Installer" --title "Complete!" --msgbox "AcreetionOS installation finished successfully!\n\nYou can now choose what to do next from the main menu." 8 60
+                        else
+                            dialog --backtitle "AcreetionOS Installer" --title "FATAL ERROR" --msgbox "The installation failed. Please check the log file for details:\n\n$LOG_FILE" 10 60
+                        fi
                     fi
                 fi
                 ;;
             6)
-                local prompt_text="Are you sure you want to quit the installer?"
                 if [ "$INSTALLATION_COMPLETE" = true ]; then
-                    prompt_text="The installation is complete. Would you like to reboot the system now?"
-                    dialog --backtitle "AcreetionOS Installer" --title "Reboot System?" --yesno "$prompt_text" 8 60
-                    if [ $? -eq 0 ]; then # Yes, reboot
-                        run_cmd "umount -R /mnt"
-                        run_cmd "reboot"
-                        clear; exit 0
-                    else # No, exit to shell
-                        dialog --backtitle "AcreetionOS Installer" --title "Exiting" --infobox "Exiting to shell..." 4 30 ; sleep 1
-                        clear; exit 0
-                    fi
+                    tui_post_install_menu
                 else
-                    dialog --backtitle "AcreetionOS Installer" --title "Quit" --yesno "$prompt_text" 6 40
+                    dialog --backtitle "AcreetionOS Installer" --title "Quit" --yesno "Are you sure you want to quit the installer?" 6 40
                     [ $? -eq 0 ] && { clear; exit 0; }
                 fi
                 ;;
