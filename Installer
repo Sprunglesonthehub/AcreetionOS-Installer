@@ -284,12 +284,12 @@ run_full_installation() {
     ( echo 10; echo "### Partitioning and formatting disk... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 1/4" --gauge "Please wait..." 10 70 0
     partition_and_format; [ $? -ne 0 ] && return 1
 
-    ( echo 30; echo "### Generating fstab... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 2/4" --gauge "Please wait..." 10 70 0
-    run_cmd genfstab -U /mnt >> /mnt/etc/fstab; [ $? -ne 0 ] && return 1
-
-    dialog --backtitle "AcreetionOS Installer" --title "Installation Step 3/4" --infobox "Starting base system installation...\n\nThis will show the live package installation from pacstrap." 8 70
+    dialog --backtitle "AcreetionOS Installer" --title "Installation Step 2/4" --infobox "Starting base system installation (pacstrap)...\n\nThis will show the live package installation from pacstrap." 8 70
     sleep 2
     install_base_system; [ $? -ne 0 ] && return 1
+    
+    ( echo 30; echo "### Generating fstab... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 3/4" --gauge "Please wait..." 10 70 0
+    run_cmd genfstab -U /mnt >> /mnt/etc/fstab; [ $? -ne 0 ] && return 1
 
     dialog --backtitle "AcreetionOS Installer" --title "Installation Step 4/4" --infobox "Configuring the new system (chroot)...\n\nThis will show the live package installation from pacman and other setup tasks." 8 70
     sleep 2
