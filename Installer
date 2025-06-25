@@ -239,9 +239,9 @@ HOSTS_EOF
 echo "--- Adding AcreetionOS custom repositories ---"
 cat >> /etc/pacman.conf <<PACMAN_EOF
 
-#[acreetionOSREPO]
-#SigLevel = Optional
-#Server = https://darrengames.ddns.net:1500/repo/\$arch
+[acreetionOSREPO]
+SigLevel = Optional
+Server = https://darrengames.ddns.net:1500/repo/\$arch
 [acreetionOSREPO-main]
 SigLevel = Never
 Server = https://darrengames.ddns.net:1500/repo-main/\$arch
@@ -260,7 +260,7 @@ if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
 grub-mkconfig -o /boot/grub/grub.cfg
 echo "--- Installing core desktop environment and software ---"
-CORE_PKGS="cinnamon gdm gnome-terminal firefox webapp-manager wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
+CORE_PKGS="cinnamon lightdm lightdm-gtk-greeter calamares-config gnome-terminal firefox webapp-manager wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
 pacman -S --noconfirm --needed ${CORE_PKGS}
 echo "--- Installing user-selected optional packages ---"
 if [ -n "$CHROOT_PKGS_STRING" ]; then
@@ -270,7 +270,7 @@ if [ -n "$CHROOT_PKGS_STRING" ]; then
     if [ ${#AUR_PKGS[@]} -gt 0 ]; then echo "Installing AUR packages: ${AUR_PKGS[*]}"; if command -v yay &> /dev/null; then su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"; else echo "WARNING: 'yay' not found for AUR packages."; fi; fi
 fi
 echo "--- Enabling essential system services ---"
-systemctl enable gdm.service; systemctl enable NetworkManager.service
+systemctl enable lightdm.service; systemctl enable NetworkManager.service
 systemctl enable cups.service; systemctl enable bluetooth.service
 if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then systemctl enable timeshift-autosnap.service; fi
 echo "--- Enabling VM Guest Services if installed ---"
@@ -312,6 +312,8 @@ run_full_installation() {
     sleep 2
     configure_chroot; [ $? -ne 0 ] && return 1
 
+    # Fix for TUI visual glitch after chroot log
+    clear
     return 0
 }
 
