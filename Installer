@@ -262,16 +262,17 @@ run_install() {
         "$DUAL_BOOT_MODE" "$HOSTNAME" "$USERNAME" "$USER_PASSWORD" "$chroot_pkgs_string" >> "$LOG_FILE" 2>&1 &
     local chroot_pid=$!
 
-    # Display a pulsing gauge box to show activity
+    # Display a gauge box with a simple message
     (
-        while ps -p $chroot_pid > /dev/null; do
-            for i in 0 10 20 30 40 50 60 70 80 90 100 90 80 70 60 50 40 30 20 10; do
-                if ! ps -p $chroot_pid > /dev/null; then break 2; fi
-                echo $i; sleep 0.1
-            done
+        echo "XXX"
+        echo "Installing AcreetionOS unique packages, please be patient."
+        echo "This may take several minutes."
+        echo "XXX"
+        # Keep the gauge up while the background process runs
+        while ps -p $chroot_pid >/dev/null; do
+            sleep 1
         done
-        echo 100
-    ) | dialog --backtitle "AcreetionOS Installer" --title "Final Configuration" --gauge "Installing AcreetionOS unique packages, please be patient." 10 70 0
+    ) | dialog --backtitle "AcreetionOS Installer" --title "Final Configuration" --gauge "" 10 70 0
         
     wait $chroot_pid
     local exit_code=$?
