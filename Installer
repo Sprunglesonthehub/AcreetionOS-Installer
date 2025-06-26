@@ -79,7 +79,7 @@ tui_user() { while true; do HOSTNAME=$(dialog --backtitle "AcreetionOS Installer
 tui_customization_menu() { while true; do CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Software & Customization" --cancel-label "Back to Main Menu" --menu "Select a category to customize:" 20 70 8 "Kernel" "Select the Linux kernel to install" "Nvidia" "Select Nvidia drivers to install" "Fonts" "Select additional TTF fonts" "Gaming" "Select gaming software (Steam, Lutris)" "Browsers" "Select additional web browsers" "Virtualization" "Select virtualization software" "Misc" "Select miscellaneous desktop software" 2>&1 >/dev/tty); [ $? -ne 0 ] && break; case "$CHOICE" in "Kernel") tui_select_kernel ;; "Nvidia") tui_select_nvidia ;; "Fonts") tui_select_fonts ;; "Gaming") tui_select_gaming ;; "Browsers") tui_select_browsers ;; "Virtualization") tui_select_virtualization ;; "Misc") tui_select_misc ;; esac; done; }
 tui_select_kernel() { CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Kernel Selection" --cancel-label "Back" --default-item "$KERNEL_PACKAGE" --radiolist "Select which kernel to install. The correct headers will be added automatically." 15 70 4 "linux" "Standard, latest Arch Linux kernel" "on" "linux-lts" "Long Term Support kernel, for stability" "off" "linux-zen" "Performance-tuned kernel (Zen scheduler)" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; KERNEL_PACKAGE=$CHOICE; KERNEL_HEADERS_PACKAGE="${CHOICE}-headers"; CUSTOM_CONFIGURED=true; }
 tui_select_nvidia() { CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Nvidia Driver Selection" --cancel-label "Back" --radiolist "If you have an Nvidia GPU, select the appropriate proprietary driver." 15 70 3 "none" "No proprietary drivers (for AMD/Intel/Nouveau)" "on" "latest" "Latest driver for modern GPUs" "off" "legacy" "470xx driver for older GPUs (Kepler series)" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; case "$CHOICE" in "latest") [ "$KERNEL_PACKAGE" == "linux-lts" ] && add_pkg CHROOT_EXTRA_PKGS "nvidia-lts" || add_pkg CHROOT_EXTRA_PKGS "nvidia" ;; "legacy") add_pkg CHROOT_EXTRA_PKGS "nvidia-470xx-dkms" ;; esac; CUSTOM_CONFIGURED=true; }
-tui_select_fonts() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Font Selection" --cancel-label "Back" --separate-output --checklist "Select additional fonts to install:" 20 70 5 "ttf-liberation" "Google's Liberation fonts (common)" "on" "ttf-dejavu" "DejaVu fonts (good coverage)" "on" "ttf-droid" "Google's Droid fonts" "off" "noto-fonts" "Google's Noto fonts (comprehensive)" "off" "ttf-font-awesome" "Iconic font set for apps" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; CUSTOM_CONFIGURED=true; }
+tui_select_fonts() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Font Selection" --cancel-label "Back" --separate-output --checklist "Select additional fonts to install:" 20 70 5 "ttf-liberation" "Google's Liberation fonts (common)" "on" "ttf-dejavu" "DejaVu fonts (good coverage)" "on" "ttf-droid" "Google's Droid fonts" "off" "noto-fonts" "Google's Noto fonts (co mprehensive)" "off" "ttf-font-awesome" "Iconic font set for apps" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; CUSTOM_CONFIGURED=true; }
 tui_select_gaming() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Gaming Software" --cancel-label "Back" --separate-output --checklist "Select gaming software to install:" 20 70 3 "steam" "Valve's Steam platform" "off" "lutris" "Open gaming platform" "off" "steam-native-runtime" "For native Linux games on Steam" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; CUSTOM_CONFIGURED=true; }
 tui_select_browsers() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Web Browsers" --cancel-label "Back" --separate-output --checklist "Select browsers to install (requires AUR helper):" 20 70 5 "google-chrome" "Google Chrome (from AUR)" "off" "brave-bin" "Brave Browser (from AUR)" "off" "microsoft-edge-stable-bin" "MS Edge (from AUR)" "off" "librewolf" "Firefox fork focused on privacy" "off" "torguard-bin" "Torguard VPN Client (from AUR)" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; if [ -n "$CHOICES" ]; then add_pkg PACSTRAP_EXTRA_PKGS "base-devel"; add_pkg CHROOT_EXTRA_PKGS "yay-bin"; fi; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; done; CUSTOM_CONFIGURED=true; }
 tui_select_virtualization() { CHOICES=$(dialog --backtitle "AcreetionOS Installer" --title "Virtualization Software" --cancel-label "Back" --separate-output --checklist "Select virtualization software:" 20 70 3 "virtualbox" "Oracle VirtualBox" "off" "virt-manager" "KVM/QEMU frontend (recommended)" "off" "gnome-boxes" "Simple GNOME virtualization app" "off" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; for CHOICE in $CHOICES; do add_pkg CHROOT_EXTRA_PKGS "$CHOICE"; if [ "$CHOICE" == "virtualbox" ]; then add_pkg CHROOT_EXTRA_PKGS "virtualbox-host-dkms"; add_pkg CHROOT_EXTRA_PKGS "virtualbox-guest-iso"; fi; if [ "$CHOICE" == "virt-manager" ]; then add_pkg CHROOT_EXTRA_PKGS "qemu-desktop"; add_pkg CHROOT_EXTRA_PKGS "dnsmasq"; fi; done; CUSTOM_CONFIGURED=true; }
@@ -197,15 +197,12 @@ EOF
             return 1
         fi
         
-        run_cmd echo "# Wiping potential old signatures from new partitions..."
         run_cmd wipefs -a "$efi_part" || { run_cmd echo "FATAL: Failed to wipe EFI partition."; return 1; }
         run_cmd wipefs -a "$root_part" || { run_cmd echo "FATAL: Failed to wipe root partition."; return 1; }
 
-        run_cmd echo "# Formatting partitions..."
         run_cmd mkfs.fat -F32 "$efi_part" || { run_cmd echo "FATAL: mkfs.fat failed on EFI partition."; return 1; }
         run_cmd mkfs.ext4 -F -q "$root_part" || { run_cmd echo "FATAL: mkfs.ext4 failed on root partition."; return 1; }
         
-        run_cmd echo "# Mounting filesystems..."
         run_cmd mount "$root_part" /mnt || { run_cmd echo "FATAL: Failed to mount root partition $root_part."; return 1; }
         run_cmd mkdir -p /mnt/boot || { run_cmd echo "FATAL: Failed to create /mnt/boot directory."; return 1; }
         run_cmd mount "$efi_part" /mnt/boot || { run_cmd echo "FATAL: Failed to mount EFI partition $efi_part."; return 1; }
@@ -324,12 +321,32 @@ fi
 echo "--- Re-generating initramfs to prevent kernel panic ---"
 mkinitcpio -P
 
-echo "--- Installing and configuring GRUB bootloader ---"
-if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; fi
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
-grub-mkconfig -o /boot/grub/grub.cfg
+# --- Switch to systemd-boot installation ---
 
-echo "--- Enabling essential system services ---"
+echo "--- Installing systemd-boot bootloader ---"
+# Install systemd-boot (if not already installed)
+bootctl --path=/boot install
+
+# Create loader.conf
+cat > /mnt/boot/loader/loader.conf <<EOF
+default arch
+timeout 4
+console-mode max
+editor 0
+EOF
+
+# Create entry for Arch Linux
+mkdir -p /mnt/boot/loader/entries
+cat > /mnt/boot/loader/entries/arch.conf <<EOF
+title   Arch Linux
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-partlabel/AOS_ROOT) rw
+EOF
+
+# Note: Adjust the root= parameter as needed based on your partition's UUID or label.
+
+# --- Enable system services ---
 systemctl enable lightdm.service; systemctl enable NetworkManager.service
 systemctl enable cups.service; systemctl enable bluetooth.service
 if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then systemctl enable timeshift-autosnap.service; fi
