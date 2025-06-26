@@ -4,7 +4,7 @@
 #  AcreetionOS Arch Linux Installation Script
 #
 #  Author: AI Assistant
-#  Version: 29.0 (Final, Feature-Complete)
+#  Version: 30.0 (Final, Polished UI)
 #
 #  !!! DANGER !!!
 #  This is a LIVE installer and will make PERMANENT, DESTRUCTIVE
@@ -100,6 +100,23 @@ tui_review_and_install() {
     dialog --backtitle "AcreetionOS Installer" --title "Final Confirmation" --yesno "$review_text" 20 60
     return $?
 }
+
+tui_show_progress() {
+    local pid=$1
+    local text=$2
+    local i=0
+    (
+    while ps -p $pid > /dev/null; do
+        if [ $i -lt 99 ]; then
+            i=$((i + 1))
+        fi
+        echo $i
+        sleep 1.2
+    done
+    echo 100
+    ) | dialog --backtitle "AcreetionOS Installer" --title "Installation in Progress" --gauge "$text" 10 70 0
+}
+
 
 # --- Installation Engine ---
 
@@ -241,7 +258,6 @@ EOF
     stdbuf -oL -eL pacstrap -C /tmp/pacman.conf -K /mnt "${pkgs_to_install[@]}" 2>&1 | tee -a "$LOG_FILE" | dialog --backtitle "AcreetionOS Installer" --title "Installing Base System (Live)" --programbox 30 100
     local exit_code=${PIPESTATUS[0]}
     
-    # Clean up the temporary config file
     rm /tmp/pacman.conf
     clear # Fix for screen corruption after programbox
     
@@ -328,20 +344,17 @@ EOF
     run_cmd echo "# --- Executing Chroot Configuration ---"
     
     # Run chroot process in background
-    stdbuf -oL -eL arch-chroot /mnt /setup_chroot.sh \
+    arch-chroot /mnt /setup_chroot.sh \
         "$DUAL_BOOT_MODE" "$HOSTNAME" "$USERNAME" "$USER_PASSWORD" "$chroot_pkgs_string" >> "$LOG_FILE" 2>&1 &
     local chroot_pid=$!
 
-    # Display a static gauge box to show activity
-    (
-        echo 100
-    ) | dialog --backtitle "AcreetionOS Installer" --title "Final Configuration" --gauge "Installing AcreetionOS unique packages, please be patient." 10 70 100
+    # Display a simulated incremental progress bar
+    tui_show_progress $chroot_pid "Installing AcreetionOS unique packages, please be patient."
         
     wait $chroot_pid
     local exit_code=$?
     
     run_cmd rm /mnt/setup_chroot.sh
-    # Clear the screen after the gauge box to prevent artifacts
     clear
     return $exit_code
 }
