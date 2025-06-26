@@ -1,8 +1,22 @@
 #!/bin/bash
 
+<<<<<<< HEAD
 # ===================== ArchWiki Install Script =====================
 # Version: 30.0
 # WARNING: Use with caution! This will wipe your disk!
+=======
+# ##################################################################
+#  AcreetionOS Arch Linux Installation Script
+#
+#  Author: AI Assistant
+#  Version: 26.0 (VM Guest Support)
+#
+#  !!! DANGER !!!
+#  This is a LIVE installer and will make PERMANENT, DESTRUCTIVE
+#  changes to your system's storage. It is NOT a simulation.
+#  USE WITH EXTREME CAUTION. Back up all data before proceeding.
+# ##################################################################
+>>>>>>> parent of 528910b (Changed to fdisk)
 
 LOG_FILE="arch_install.log"
 
@@ -158,6 +172,7 @@ partition_and_format() {
     umount -R /mnt 2>/dev/null || true
     umount ${TARGET_DISK}* 2>/dev/null || true
 
+<<<<<<< HEAD
     # Wipe
     run_cmd wipefs -a "$TARGET_DISK"
 
@@ -196,6 +211,31 @@ partition_and_format() {
         fi
         run_cmd mkfs.ext4 -F "$ROOT_PART"
         run_cmd mount "$ROOT_PART" /mnt
+=======
+    if [ "$DUAL_BOOT_MODE" = true ]; then
+        run_cmd "# Dual Boot Mode Enabled"
+        local efi_part; efi_part=$(lsblk -plno NAME,PARTLABEL,FSTYPE "$TARGET_DISK" | grep -i "fat32.*efi" | awk '{print $1}')
+        local win_part; win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | sort -k1 | tail -n1 | awk '{print $1}')
+        run_cmd "# Found EFI partition to reuse: $efi_part"; run_cmd "# Found Windows partition to shrink: $win_part"
+        run_cmd "ntfsresize --size -${ARCH_PART_SIZE}G $win_part"
+        run_cmd "# Creating new partition for AcreetionOS with label AOS_ROOT..."; run_cmd "sgdisk --largest-new=0 --change-name=0:'AOS_ROOT' --typecode=0:8300 $TARGET_DISK"
+        run_cmd "partprobe $TARGET_DISK"
+        local arch_root_part="/dev/disk/by-partlabel/AOS_ROOT"
+        run_cmd "# Verifying new partition at $arch_root_part"
+        if ! [ -b "$arch_root_part" ]; then run_cmd "# FATAL: Could not find partition by label 'AOS_ROOT' after creation."; return 1; fi
+        run_cmd "mkfs.ext4 -F $arch_root_part"; run_cmd "mount $arch_root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"
+    else
+        run_cmd "# Overwrite Mode Enabled"
+        local efi_label="AOS_EFI"; local root_label="AOS_ROOT"
+        run_cmd "sgdisk --zap-all $TARGET_DISK"
+        run_cmd "sgdisk --new=1:0:+512M --typecode=1:ef00 --change-name=1:'$efi_label' $TARGET_DISK"
+        run_cmd "sgdisk --new=2:0:0 --typecode=2:8300 --change-name=2:'$root_label' $TARGET_DISK"
+        run_cmd "partprobe $TARGET_DISK"; sleep 2
+        local efi_part="/dev/disk/by-partlabel/$efi_label"; local root_part="/dev/disk/by-partlabel/$root_label"
+        run_cmd "# Verifying partitions at $efi_part and $root_part"
+        if ! [ -b "$efi_part" ] || ! [ -b "$root_part" ]; then run_cmd "# FATAL: Could not find partitions by label after creation. Check logs."; return 1; fi
+        run_cmd "mkfs.fat -F32 $efi_part"; run_cmd "mkfs.ext4 -F $root_part"; run_cmd "mount $root_part /mnt"; run_cmd "mkdir -p /mnt/boot"; run_cmd "mount $efi_part /mnt/boot"
+>>>>>>> parent of 528910b (Changed to fdisk)
     fi
 }
 install_base() {
@@ -224,6 +264,7 @@ set -e
 # Install systemd-boot
 bootctl --path=/boot install
 
+<<<<<<< HEAD
 # Create loader directory
 mkdir -p /boot/loader/entries
 
@@ -244,6 +285,48 @@ options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-label/ArchRoot) 
 EOF2
 
 # Additional user/system setup can be added here
+=======
+#[acreetionOSREPO]
+#SigLevel = Optional
+#Server = https://darrengames.ddns.net:1500/repo/\$arch
+[acreetionOSREPO-main]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/repo-main/\$arch
+[personal]
+SigLevel = Never
+Server = https://darrengames.ddns.net:1500/personal
+PACMAN_EOF
+echo "--- Synchronizing new repository databases ---"; pacman -Sy
+echo "--- Setting up user accounts and sudo ---"
+passwd -l root
+useradd -m -G wheel -s /bin/bash "${USERNAME}"; echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
+sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+echo "--- Installing and configuring GRUB bootloader ---"
+if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; fi
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
+grub-mkconfig -o /boot/grub/grub.cfg
+echo "--- Installing core desktop environment and software ---"
+CORE_PKGS="cinnamon gdm gnome-terminal firefox webapp-manager wireguard-tools bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
+pacman -S --noconfirm --needed ${CORE_PKGS}
+echo "--- Installing user-selected optional packages ---"
+if [ -n "$CHROOT_PKGS_STRING" ]; then
+    REPO_PKGS=(); AUR_PKGS=()
+    for pkg in $CHROOT_PKGS_STRING; do if pacman -Si "$pkg" &> /dev/null; then REPO_PKGS+=("$pkg"); else AUR_PKGS+=("$pkg"); fi; done
+    if [ ${#REPO_PKGS[@]} -gt 0 ]; then echo "Installing repository packages: ${REPO_PKGS[*]}"; pacman -S --noconfirm --needed "${REPO_PKGS[@]}"; fi
+    if [ ${#AUR_PKGS[@]} -gt 0 ]; then echo "Installing AUR packages: ${AUR_PKGS[*]}"; if command -v yay &> /dev/null; then su - "${USERNAME}" -c "yay -S --noconfirm ${AUR_PKGS[*]}"; else echo "WARNING: 'yay' not found for AUR packages."; fi; fi
+fi
+echo "--- Enabling essential system services ---"
+systemctl enable gdm.service; systemctl enable NetworkManager.service
+systemctl enable cups.service; systemctl enable bluetooth.service
+if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then systemctl enable timeshift-autosnap.service; fi
+echo "--- Enabling VM Guest Services if installed ---"
+if [ -f /usr/lib/systemd/system/vboxservice.service ]; then systemctl enable vboxservice.service; fi
+if [ -f /usr/lib/systemd/system/vmtoolsd.service ]; then systemctl enable vmtoolsd.service; fi
+if [ -f /usr/lib/systemd/system/qemu-guest-agent.service ]; then systemctl enable qemu-guest-agent.service; fi
+if [ -f /usr/lib/systemd/system/spice-vdagentd.service ]; then systemctl enable spice-vdagentd.service; fi
+# Hyper-V daemons are enabled by default through presets, no need to manually enable.
+echo "--- Chroot configuration complete ---"
+>>>>>>> parent of 528910b (Changed to fdisk)
 EOF
     chmod +x /mnt/setup_chroot.sh
     arch-chroot /mnt /setup_chroot.sh
