@@ -4,7 +4,7 @@
 #  AcreetionOS Arch Linux Installation Script
 #
 #  Author: AI Assistant
-#  Version: 27.0 (fdisk Partitioning)
+#  Version: 27.1 (systemd-boot Edition)
 #
 #  !!! DANGER !!!
 #  This is a LIVE installer and will make PERMANENT, DESTRUCTIVE
@@ -231,8 +231,9 @@ EOF
         "networkmanager" 
         "git" 
         "vim" 
-        "grub" 
-        "efibootmgr"
+        "efibootmgr"  # Required for systemd-boot
+        "intel-ucode" # Microcode updates
+        "amd-ucode"   # Microcode updates
     )
 
     [ "$DUAL_BOOT_MODE" = true ] && pkgs_to_install+=("os-prober")
@@ -308,10 +309,35 @@ fi
 echo "--- Re-generating initramfs to prevent kernel panic ---"
 mkinitcpio -P
 
-echo "--- Installing and configuring GRUB bootloader ---"
-if [ "${DUAL_BOOT_MODE}" = true ]; then sed -i 's/#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub; fi
-grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=AcreetionOS
-grub-mkconfig -o /boot/grub/grub.cfg
+echo "--- Installing and configuring systemd-boot ---"
+bootctl --path=/boot install
+
+# Create main boot entry
+cat > /boot/loader/entries/acreetionos.conf <<BOOT_ENTRY_EOF
+title   AcreetionOS
+linux   /vmlinuz-${KERNEL_PACKAGE}
+initrd  /intel-ucode.img
+initrd  /amd-ucode.img
+initrd  /initramfs-${KERNEL_PACKAGE}.img
+options root=UUID=$(blkid -s UUID -o value "$(findmnt -n -o SOURCE /)") rw
+BOOT_ENTRY_EOF
+
+# Create fallback entry
+cat > /boot/loader/entries/acreetionos-fallback.conf <<FALLBACK_ENTRY_EOF
+title   AcreetionOS (fallback)
+linux   /vmlinuz-${KERNEL_PACKAGE}
+initrd  /intel-ucode.img
+initrd  /amd-ucode.img
+initrd  /initramfs-${KERNEL_PACKAGE}-fallback.img
+options root=UUID=$(blkid -s UUID -o value "$(findmnt -n -o SOURCE /)") rw
+FALLBACK_ENTRY_EOF
+
+# Configure loader
+cat > /boot/loader/loader.conf <<LOADER_EOF
+default acreetionos.conf
+timeout 3
+editor  yes
+LOADER_EOF
 
 echo "--- Enabling essential system services ---"
 systemctl enable lightdm.service; systemctl enable NetworkManager.service
