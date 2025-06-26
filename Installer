@@ -1,24 +1,16 @@
 #!/bin/bash
 
-# ##################################################################
-#  AcreetionOS Arch Linux Installer
-#
-#  Author: AI Assistant
-#  Version: 30.0 (Final, Polished UI)
-#
-#  !!! DANGER !!!
-#  This is a LIVE installer and will make PERMANENT, DESTRUCTIVE
-#  changes to your system's storage. It is NOT a simulation.
-#  USE WITH EXTREME CAUTION. Backup all data before proceeding.
-# ##################################################################
+# =================== AcreetionOS Installer ===================
+# Version: 30.0
+# Note: Use with caution. Make sure to backup data.
 
 LOG_FILE="acreetionos-install.log"
 
-# --- Style ---
+# Style
 C_ERASE="\Zb\Z1ERASE\Zn"
 C_DANGER_BG="--colors --backtitle \Zb\Z1DANGER\Zn"
 
-# --- Global State ---
+# Global variables
 NETWORK_CONFIGURED=false
 DISK_CONFIGURED=false
 USER_CONFIGURED=false
@@ -26,20 +18,19 @@ CUSTOM_CONFIGURED=false
 INSTALLATION_COMPLETE=false
 VM_TYPE="None"
 
-# --- Config ---
 TARGET_DISK=""
 ARCH_PART_SIZE="50"
 HOSTNAME=""
 USERNAME=""
 USER_PASSWORD=""
 DUAL_BOOT_MODE=false
-INSTALL_MODE=""
+
 PACSTRAP_EXTRA_PKGS=()
 CHROOT_EXTRA_PKGS=()
 KERNEL_PACKAGE="linux"
 KERNEL_HEADERS_PACKAGE="linux-headers"
 
-# --- Helper ---
+# --- Utility ---
 run_cmd() {
     stdbuf -oL -eL "$@" >> "$LOG_FILE" 2>&1
     return $?
@@ -54,10 +45,10 @@ add_pkg() {
     eval "${arr_name}+=(\"$pkg\")"
 }
 
-# --- UI ---
+# =================== UI Functions ===================
 tui_welcome() {
     dialog --backtitle "AcreetionOS Installer" --title "Welcome & Warning" --msgbox \
-        "Welcome to the AcreetionOS Installer.\n\nThis script will make PERMANENT changes to your disk.\nUse with caution.\n\nBack up all data." 14 70
+        "Welcome to the AcreetionOS Installer.\n\nThis script will make permanent changes to your disk.\nUse with caution.\n\nBack up all data." 14 70
 }
 tui_virtualization_check() {
     dialog --backtitle "AcreetionOS Installer" --title "Virtualization Check" --yesno \
@@ -127,23 +118,27 @@ tui_windows_backup() {
     local usb
     usb=$(dialog --backtitle "AcreetionOS Installer" --menu "Select USB:" 20 70 5 "${options[@]}" 2>&1 >/dev/tty)
     [ $? -ne 0 ] && return
-    dialog --backtitle "AcreetionOS Installer" --yesno "All data on $usb will be destroyed. Proceed?" 10 70
+    dialog --backtitle "AcreetionOS Installer" --yesno "All data on $usb will be destroyed. Proceed?" 8 60
     [ $? -ne 0 ] && return
     local winpart
-    winpart=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1{print $1}')
+    winpart=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1 {print $1}')
     ( echo 10; mkfs.ext4 -F "$usb" >/dev/null; sleep 2; echo 25; mkdir -p /mnt/backup; mount "$usb" /mnt/backup; sleep 2; echo 50; ntfsclone --save-image -o - "$winpart" | gzip -c > /mnt/backup/windows_backup.img.gz; sleep 1; echo 90; umount /mnt/backup; echo 100; ) | dialog --backtitle "AcreetionOS Installer" --gauge "Backup in progress" 10 70 0
     dialog --backtitle "AcreetionOS Installer" --msgbox "Backup complete." 8 50
 }
-# ... (Additional TUIs omitted for brevity)
+# ... (more TUIs as needed)
 
+# =================== Disk Partitioning ===================
 partition_and_format() {
     run_cmd echo "# Partitioning..."
     umount -R /mnt 2>/dev/null || true
     umount ${TARGET_DISK}* 2>/dev/null || true
+
     if [ "$DUAL_BOOT_MODE" = true ]; then
-        # Dual boot logic (omitted for brevity)
+        # Dual boot logic (not shown for brevity)
+        # Implement your dual boot partitioning here
         :
     else
+        # Overwrite mode
         run_cmd wipefs -a "$TARGET_DISK"
         fdisk "$TARGET_DISK" <<EOF
 g
@@ -161,6 +156,7 @@ w
 EOF
         run_cmd partprobe "$TARGET_DISK"
         sleep 3
+        # Identify partitions
         if [[ "$TARGET_DISK" == *"nvme"* ]]; then
             EFI_PART="${TARGET_DISK}p1"
             ROOT_PART="${TARGET_DISK}p2"
@@ -178,7 +174,9 @@ EOF
     fi
 }
 
+# =================== Install Base System ===================
 install_base_system() {
+    # Create temporary pacman.conf
     cat > /tmp/pacman.conf <<EOF
 [options]
 Architecture = auto
@@ -204,7 +202,7 @@ EOF
     rm /tmp/pacman.conf
 }
 
-# --- CHROOT with systemd-boot ---
+# =================== Chroot Configuration ===================
 configure_chroot() {
     cat > /mnt/setup_chroot.sh <<'EOF'
 #!/bin/bash
@@ -232,8 +230,8 @@ initrd  /initramfs-linux.img
 options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-label/AcrionRoot) rw
 EOF2
 
-# (Add locale, user, system setup as needed)
-# You can put your existing setup commands here
+# Additional setup: locales, users, services...
+# Place your existing setup commands here
 
 EOF
 
@@ -242,7 +240,7 @@ EOF
     rm /mnt/setup_chroot.sh
 }
 
-# --- Full installation sequence ---
+# =================== Main Full Install ===================
 run_full_installation() {
     partition_and_format
     install_base_system
@@ -251,9 +249,9 @@ run_full_installation() {
     # Additional steps...
 }
 
-# --- Main menu ---
+# =================== Main Menu ===================
 main() {
-    if ! command -v dialog &> /dev/null; then echo "Dialog required"; exit 1; fi
+    if ! command -v dialog &> /dev/null; then echo "dialog required"; exit 1; fi
     > "$LOG_FILE"
     tui_welcome
     tui_virtualization_check
@@ -270,23 +268,17 @@ main() {
 
         case "$CHOICE" in
             1) tui_network ;;
-            2) 
-                if [ "$INSTALLATION_COMPLETE" = true ]; then
-                    dialog --backtitle "AcreetionOS Installer" --msgbox "Disk already configured." 8 50
-                else
-                    tui_disk
-                fi
-                ;;
+            2) tui_disk ;;  # Call your fixed disk setup
             3) tui_user ;;
             4) tui_customization_menu ;;
             5)
                 if [ "$INSTALLATION_COMPLETE" = true ]; then
-                    dialog --backtitle "AcreetionOS Installer" --msgbox "Installation already complete." 8 50
+                    dialog --backtitle "AcreetionOS Installer" --msgbox "Already complete." 8 50
                 elif ! $NETWORK_CONFIGURED || ! $DISK_CONFIGURED || ! $USER_CONFIGURED; then
-                    dialog --backtitle "AcreetionOS Installer" --msgbox "Complete all steps before installing." 8 50
+                    dialog --backtitle "AcreetionOS Installer" --msgbox "Complete all steps first." 8 50
                 else
                     if tui_review_and_install; then
-                        if dialog --backtitle "AcreetionOS Installer" --title "Warning" --yesno "Are you sure to proceed? This will erase disk." 10 70; then
+                        if dialog --backtitle "AcreetionOS Installer" --title "Warning" --yesno "Proceed? This will erase disk." 10 70; then
                             clear
                             run_full_installation
                             INSTALLATION_COMPLETE=true
@@ -295,12 +287,9 @@ main() {
                     fi
                 fi
                 ;;
-            6)
-                break
-                ;;
+            6) break ;;
         esac
     done
 }
 
-# --- Run ---
 main "$@"
