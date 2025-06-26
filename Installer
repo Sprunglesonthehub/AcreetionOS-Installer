@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# =================== AcreetionOS Installer ===================
+# ==================== AcreetionOS Installer ====================
 # Version: 30.0
-# Note: Use with caution. Make sure to backup data.
+# WARNING: Use carefully! Make sure to backup data.
 
 LOG_FILE="acreetionos-install.log"
 
@@ -10,7 +10,7 @@ LOG_FILE="acreetionos-install.log"
 C_ERASE="\Zb\Z1ERASE\Zn"
 C_DANGER_BG="--colors --backtitle \Zb\Z1DANGER\Zn"
 
-# Global variables
+# Global State
 NETWORK_CONFIGURED=false
 DISK_CONFIGURED=false
 USER_CONFIGURED=false
@@ -18,6 +18,7 @@ CUSTOM_CONFIGURED=false
 INSTALLATION_COMPLETE=false
 VM_TYPE="None"
 
+# Config variables
 TARGET_DISK=""
 ARCH_PART_SIZE="50"
 HOSTNAME=""
@@ -48,10 +49,11 @@ add_pkg() {
 # =================== UI Functions ===================
 tui_welcome() {
     dialog --backtitle "AcreetionOS Installer" --title "Welcome & Warning" --msgbox \
-        "Welcome to the AcreetionOS Installer.\n\nThis script will make permanent changes to your disk.\nUse with caution.\n\nBack up all data." 14 70
+        "Welcome to the AcreetionOS Installer.\n\nThis script will make PERMANENT changes to your disk.\nUse with caution.\n\nBack up all data." 14 70
 }
+
 tui_virtualization_check() {
-    dialog --backtitle "AcreetionOS Installer" --title "Virtualization Check" --yesno \
+    dialog --backtitle "AcreetionOS Installer" --title "Virtualization" --yesno \
         "Is this inside a Virtual Machine?" 8 70
     if [ $? -eq 0 ]; then
         VM_TYPE=$(dialog --backtitle "AcreetionOS Installer" --title "Select VM" --radiolist \
@@ -69,6 +71,7 @@ tui_virtualization_check() {
         esac
     fi
 }
+
 tui_network() {
     while true; do
         CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Network" --menu "Select option:" 15 55 3 \
@@ -83,6 +86,7 @@ tui_network() {
                 [ $? -ne 0 ] && continue
                 WIFI_PASS=$(dialog --backtitle "AcreetionOS Installer" --passwordbox "Enter password for $WIFI_CHOICE:" 8 40 2>&1 >/dev/tty)
                 [ $? -ne 0 ] && continue
+                # Assume connection is successful
                 dialog --backtitle "AcreetionOS Installer" --infobox "Connecting..." 4 40
                 ping -c 1 archlinux.org >/dev/null 2>&1
                 dialog --backtitle "AcreetionOS Installer" --msgbox "Connected!" 6 30
@@ -105,13 +109,15 @@ tui_network() {
         esac
     done
 }
+
 tui_windows_backup() {
+    # Backup Windows partition to USB
     mapfile -t usb_devices < <(lsblk -dno NAME,RM | awk '$2==1 {print "/dev/"$1}')
     if [ ${#usb_devices[@]} -eq 0 ]; then
         dialog --backtitle "AcreetionOS Installer" --msgbox "No USB drives." 8 50
         return 1
     fi
-    local -a options=()
+    local options=()
     for dev in "${usb_devices[@]}"; do
         options+=("$dev" "$(lsblk -dno SIZE,MODEL "$dev")")
     done
@@ -125,20 +131,20 @@ tui_windows_backup() {
     ( echo 10; mkfs.ext4 -F "$usb" >/dev/null; sleep 2; echo 25; mkdir -p /mnt/backup; mount "$usb" /mnt/backup; sleep 2; echo 50; ntfsclone --save-image -o - "$winpart" | gzip -c > /mnt/backup/windows_backup.img.gz; sleep 1; echo 90; umount /mnt/backup; echo 100; ) | dialog --backtitle "AcreetionOS Installer" --gauge "Backup in progress" 10 70 0
     dialog --backtitle "AcreetionOS Installer" --msgbox "Backup complete." 8 50
 }
-# ... (more TUIs as needed)
 
-# =================== Disk Partitioning ===================
+# =================== Partition & Format ===================
 partition_and_format() {
     run_cmd echo "# Partitioning..."
     umount -R /mnt 2>/dev/null || true
     umount ${TARGET_DISK}* 2>/dev/null || true
 
     if [ "$DUAL_BOOT_MODE" = true ]; then
-        # Dual boot logic (not shown for brevity)
-        # Implement your dual boot partitioning here
-        :
+        # DUAL BOOT LOGIC (not fully detailed here)
+        # Implement your dual boot partitioning if needed
+        echo "Dual boot partitioning not implemented in this script sample."
+        return 1
     else
-        # Overwrite mode
+        # OVERWRITE MODE
         run_cmd wipefs -a "$TARGET_DISK"
         fdisk "$TARGET_DISK" <<EOF
 g
@@ -176,7 +182,6 @@ EOF
 
 # =================== Install Base System ===================
 install_base_system() {
-    # Create temporary pacman.conf
     cat > /tmp/pacman.conf <<EOF
 [options]
 Architecture = auto
@@ -202,7 +207,7 @@ EOF
     rm /tmp/pacman.conf
 }
 
-# =================== Chroot Configuration ===================
+# =================== Configure chroot with systemd-boot ===================
 configure_chroot() {
     cat > /mnt/setup_chroot.sh <<'EOF'
 #!/bin/bash
@@ -231,7 +236,7 @@ options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-label/AcrionRoot
 EOF2
 
 # Additional setup: locales, users, services...
-# Place your existing setup commands here
+# (Insert your existing user setup and system configuration commands here)
 
 EOF
 
@@ -240,13 +245,13 @@ EOF
     rm /mnt/setup_chroot.sh
 }
 
-# =================== Main Full Install ===================
+# =================== Full Installation Process ===================
 run_full_installation() {
     partition_and_format
     install_base_system
     genfstab -U /mnt >> /mnt/etc/fstab
     configure_chroot
-    # Additional steps...
+    # Add other post-install steps if needed
 }
 
 # =================== Main Menu ===================
@@ -268,7 +273,7 @@ main() {
 
         case "$CHOICE" in
             1) tui_network ;;
-            2) tui_disk ;;  # Call your fixed disk setup
+            2) tui_disk ;;  # Fixed version
             3) tui_user ;;
             4) tui_customization_menu ;;
             5)
@@ -292,4 +297,5 @@ main() {
     done
 }
 
+# Call main
 main "$@"
