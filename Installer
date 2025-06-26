@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# ==================== AcreetionOS Installer ====================
+# ===================== ArchWiki Install Script =====================
 # Version: 30.0
-# WARNING: Use carefully! Make sure to backup data.
+# WARNING: Use with caution! This will wipe your disk!
 
-LOG_FILE="acreetionos-install.log"
+LOG_FILE="arch_install.log"
 
 # Style
 C_ERASE="\Zb\Z1ERASE\Zn"
@@ -14,27 +14,25 @@ C_DANGER_BG="--colors --backtitle \Zb\Z1DANGER\Zn"
 NETWORK_CONFIGURED=false
 DISK_CONFIGURED=false
 USER_CONFIGURED=false
-CUSTOM_CONFIGURED=false
-INSTALLATION_COMPLETE=false
+INSTALLATION_DONE=false
 VM_TYPE="None"
 
-# Config variables
 TARGET_DISK=""
 ARCH_PART_SIZE="50"
-HOSTNAME=""
-USERNAME=""
-USER_PASSWORD=""
-DUAL_BOOT_MODE=false
+HOSTNAME="archlinux"
+USERNAME="user"
+USER_PASSWORD="password"
+DUAL_BOOT=false
 
 PACSTRAP_EXTRA_PKGS=()
 CHROOT_EXTRA_PKGS=()
 KERNEL_PACKAGE="linux"
 KERNEL_HEADERS_PACKAGE="linux-headers"
 
-# --- Utility ---
+# --- Utility functions ---
 run_cmd() {
     stdbuf -oL -eL "$@" >> "$LOG_FILE" 2>&1
-    return $?
+    return ${PIPESTATUS[0]}
 }
 add_pkg() {
     local arr_name="$1"
@@ -46,18 +44,17 @@ add_pkg() {
     eval "${arr_name}+=(\"$pkg\")"
 }
 
-# =================== UI Functions ===================
+# --- UI functions ---
 tui_welcome() {
-    dialog --backtitle "AcreetionOS Installer" --title "Welcome & Warning" --msgbox \
-        "Welcome to the AcreetionOS Installer.\n\nThis script will make PERMANENT changes to your disk.\nUse with caution.\n\nBack up all data." 14 70
+    dialog --backtitle "ArchLinux Installation" --title "Welcome" --msgbox \
+        "Welcome! This script will install Arch Linux.\n\nIt will wipe your disk.\nBack up data!" 10 70
 }
-
-tui_virtualization_check() {
-    dialog --backtitle "AcreetionOS Installer" --title "Virtualization" --yesno \
+tui_virtualization() {
+    dialog --backtitle "ArchLinux Installation" --title "VM Detection" --yesno \
         "Is this inside a Virtual Machine?" 8 70
     if [ $? -eq 0 ]; then
-        VM_TYPE=$(dialog --backtitle "AcreetionOS Installer" --title "Select VM" --radiolist \
-            "Choose your VM platform" 15 70 4 \
+        VM_TYPE=$(dialog --backtitle "ArchLinux Installation" --title "Select VM" --radiolist \
+            "Choose your VM" 15 70 4 \
             "VirtualBox" "Oracle VirtualBox" "on" \
             "QEMU" "QEMU/KVM" "off" \
             "VMware" "VMware" "off" \
@@ -71,98 +68,109 @@ tui_virtualization_check() {
         esac
     fi
 }
-
 tui_network() {
     while true; do
-        CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Network" --menu "Select option:" 15 55 3 \
-            1 "Connect to Wi-Fi" 2 "Use Wired" 3 "Continue" 2>&1 >/dev/tty)
+        CHOICE=$(dialog --backtitle "ArchLinux Installation" --title "Network" --menu "Choose:" 15 55 3 \
+            1 "Connect Wi-Fi" 2 "Use Wired" 3 "Continue" 2>&1 >/dev/tty)
         [ $? -ne 0 ] && return
         case "$CHOICE" in
             1)
-                dialog --backtitle "AcreetionOS Installer" --infobox "Scanning Wi-Fi..." 4 40
+                dialog --backtitle "ArchLinux Installation" --infobox "Scanning Wi-Fi..." 4 40
                 sleep 1
                 local networks=("AcreetionWiFi" "Strong" "CinnamonNet" "Medium" "Public WiFi" "Weak")
-                WIFI_CHOICE=$(dialog --backtitle "AcreetionOS Installer" --menu "Select Wi-Fi:" 15 50 4 "${networks[@]}" 2>&1 >/dev/tty)
+                WIFI_CHOICE=$(dialog --backtitle "ArchLinux Installation" --menu "Select Wi-Fi" 15 50 4 "${networks[@]}" 2>&1 >/dev/tty)
                 [ $? -ne 0 ] && continue
-                WIFI_PASS=$(dialog --backtitle "AcreetionOS Installer" --passwordbox "Enter password for $WIFI_CHOICE:" 8 40 2>&1 >/dev/tty)
+                WIFI_PASS=$(dialog --backtitle "ArchLinux Installation" --passwordbox "Password for $WIFI_CHOICE" 8 40 2>&1 >/dev/tty)
                 [ $? -ne 0 ] && continue
-                # Assume connection is successful
-                dialog --backtitle "AcreetionOS Installer" --infobox "Connecting..." 4 40
+                # Assume success
                 ping -c 1 archlinux.org >/dev/null 2>&1
-                dialog --backtitle "AcreetionOS Installer" --msgbox "Connected!" 6 30
+                dialog --backtitle "ArchLinux Installation" --msgbox "Connected!" 6 30
                 timedatectl set-ntp true >/dev/null 2>&1
                 NETWORK_CONFIGURED=true
                 return
                 ;;
             2)
-                dialog --backtitle "AcreetionOS Installer" --infobox "Checking connection..." 4 40
                 ping -c 1 archlinux.org >/dev/null 2>&1
-                dialog --backtitle "AcreetionOS Installer" --msgbox "Connected!" 6 30
+                dialog --backtitle "ArchLinux Installation" --msgbox "Connected!" 6 30
                 timedatectl set-ntp true >/dev/null 2>&1
                 NETWORK_CONFIGURED=true
                 return
                 ;;
-            3)
-                NETWORK_CONFIGURED=true
-                return
-                ;;
+            3) NETWORK_CONFIGURED=true; return ;;
         esac
     done
 }
+tui_disk() {
+    # List disks
+    local disks=()
+    while read -r dev; do
+        disks+=("$dev" "$(lsblk -dno SIZE,MODEL "$dev")")
+    done < <(lsblk -dno NAME | sed 's/^/\/dev\//')
 
-tui_windows_backup() {
-    # Backup Windows partition to USB
-    mapfile -t usb_devices < <(lsblk -dno NAME,RM | awk '$2==1 {print "/dev/"$1}')
-    if [ ${#usb_devices[@]} -eq 0 ]; then
-        dialog --backtitle "AcreetionOS Installer" --msgbox "No USB drives." 8 50
-        return 1
+    local disk_choice
+    disk_choice=$(dialog --backtitle "ArchLinux Installation" --title "Select Disk" --radiolist \
+        "Available disks:" 20 70 10 \
+        "${disks[@]}" 2>&1 >/dev/tty)
+    [ $? -ne 0 ] && return
+    TARGET_DISK="$disk_choice"
+
+    # Detect Windows partition
+    local win_part
+    win_part=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1 {print $1}')
+
+    # Decide mode
+    local choice
+    if [ -n "$win_part" ]; then
+        choice=$(dialog --backtitle "ArchLinux Installation" --title "Windows detected" --menu \
+            "Detected Windows NTFS partition.\nChoose:" 15 70 2 \
+            1 "Dual boot (shrink Windows)" \
+            2 "Erase Windows" 2>&1 >/dev/tty)
+        [ $? -ne 0 ] && return
+        if [ "$choice" = "1" ]; then
+            DUAL_BOOT=true
+            ARCH_PART_SIZE=$(dialog --backtitle "ArchLinux Installation" --title "Partition Size (GB)" --inputbox \
+                "Enter size in GB for Arch root" 8 60 "$ARCH_PART_SIZE" 2>&1 >/dev/tty)
+            [ $? -ne 0 ] && return
+        else
+            DUAL_BOOT=false
+        fi
+    else
+        if dialog --backtitle "ArchLinux Installation" --title "No Windows" --yesno \
+            "No Windows partition detected. Proceed to wipe entire disk?" 8 60; then
+            DUAL_BOOT=false
+        else
+            return
+        fi
     fi
-    local options=()
-    for dev in "${usb_devices[@]}"; do
-        options+=("$dev" "$(lsblk -dno SIZE,MODEL "$dev")")
-    done
-    local usb
-    usb=$(dialog --backtitle "AcreetionOS Installer" --menu "Select USB:" 20 70 5 "${options[@]}" 2>&1 >/dev/tty)
-    [ $? -ne 0 ] && return
-    dialog --backtitle "AcreetionOS Installer" --yesno "All data on $usb will be destroyed. Proceed?" 8 60
-    [ $? -ne 0 ] && return
-    local winpart
-    winpart=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1 {print $1}')
-    ( echo 10; mkfs.ext4 -F "$usb" >/dev/null; sleep 2; echo 25; mkdir -p /mnt/backup; mount "$usb" /mnt/backup; sleep 2; echo 50; ntfsclone --save-image -o - "$winpart" | gzip -c > /mnt/backup/windows_backup.img.gz; sleep 1; echo 90; umount /mnt/backup; echo 100; ) | dialog --backtitle "AcreetionOS Installer" --gauge "Backup in progress" 10 70 0
-    dialog --backtitle "AcreetionOS Installer" --msgbox "Backup complete." 8 50
-}
 
-# =================== Partition & Format ===================
+    # Confirm wipe
+    if dialog --backtitle "ArchLinux Installation" --title "Warning" --yesno \
+        "This will erase all data on $TARGET_DISK. Proceed?" 8 60; then
+        partition_and_format
+        DISK_CONFIGURED=true
+    else
+        return
+    fi
+}
 partition_and_format() {
-    run_cmd echo "# Partitioning..."
+    echo "Partitioning disk: $TARGET_DISK" >> "$LOG_FILE"
+    # Unmount all
     umount -R /mnt 2>/dev/null || true
     umount ${TARGET_DISK}* 2>/dev/null || true
 
-    if [ "$DUAL_BOOT_MODE" = true ]; then
-        # DUAL BOOT LOGIC (not fully detailed here)
-        # Implement your dual boot partitioning if needed
-        echo "Dual boot partitioning not implemented in this script sample."
-        return 1
-    else
-        # OVERWRITE MODE
-        run_cmd wipefs -a "$TARGET_DISK"
-        fdisk "$TARGET_DISK" <<EOF
-g
-n
-1
+    # Wipe
+    run_cmd wipefs -a "$TARGET_DISK"
 
-+512M
-t
-1
-n
-2
-
-
-w
-EOF
-        run_cmd partprobe "$TARGET_DISK"
-        sleep 3
-        # Identify partitions
+    # Detect UEFI or BIOS
+    if [ -d /sys/firmware/efi ]; then
+        echo "UEFI detected, GPT." >> "$LOG_FILE"
+        run_cmd parted --script "$TARGET_DISK" mklabel gpt
+        # EFI partition 1G
+        run_cmd parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 1GiB
+        run_cmd parted --script "$TARGET_DISK" set 1 esp on
+        # Root partition remaining space
+        run_cmd parted --script "$TARGET_DISK" mkpart primary ext4 1GiB 100%
+        sleep 2
         if [[ "$TARGET_DISK" == *"nvme"* ]]; then
             EFI_PART="${TARGET_DISK}p1"
             ROOT_PART="${TARGET_DISK}p2"
@@ -170,53 +178,53 @@ EOF
             EFI_PART="${TARGET_DISK}1"
             ROOT_PART="${TARGET_DISK}2"
         fi
-        run_cmd wipefs -a "$EFI_PART"
-        run_cmd wipefs -a "$ROOT_PART"
         run_cmd mkfs.fat -F32 "$EFI_PART"
         run_cmd mkfs.ext4 -F "$ROOT_PART"
         run_cmd mount "$ROOT_PART" /mnt
         mkdir -p /mnt/boot
-        mount "$EFI_PART" /mnt/boot
+        run_cmd mount "$EFI_PART" /mnt/boot
+    else
+        echo "BIOS detected, MBR." >> "$LOG_FILE"
+        run_cmd parted --script "$TARGET_DISK" mklabel msdos
+        # Single root partition
+        run_cmd parted --script "$TARGET_DISK" mkpart primary ext4 1MiB 100%
+        sleep 2
+        if [[ "$TARGET_DISK" == *"nvme"* ]]; then
+            ROOT_PART="${TARGET_DISK}p1"
+        else
+            ROOT_PART="${TARGET_DISK}1"
+        fi
+        run_cmd mkfs.ext4 -F "$ROOT_PART"
+        run_cmd mount "$ROOT_PART" /mnt
     fi
 }
-
-# =================== Install Base System ===================
-install_base_system() {
+install_base() {
+    # Create pacman config
     cat > /tmp/pacman.conf <<EOF
 [options]
 Architecture = auto
 SigLevel = Never
 LocalFileSigLevel = Optional
 
-[acreetionOSREPO]
+[custom-repo]
 SigLevel = Optional
 Server = https://darrengames.ddns.net:1500/repo/\$arch
-
-[acreetionOSREPO-main]
-SigLevel = Never
-Server = https://darrengames.ddns.net:1500/repo-main/\$arch
-
-[personal]
-SigLevel = Never
-Server = https://darrengames.ddns.net:1500/personal
 EOF
     local pkgs=("base" "$KERNEL_PACKAGE" "linux-firmware" "$KERNEL_HEADERS_PACKAGE" "mkinitcpio" "sudo" "nano" "networkmanager" "git" "vim" "efibootmgr")
-    [ "$DUAL_BOOT_MODE" = true ] && pkgs+=("os-prober")
+    [ "$DUAL_BOOT" = true ] && pkgs+=("os-prober")
     pkgs+=("${PACSTRAP_EXTRA_PKGS[@]}")
+
     stdbuf -oL -eL pacstrap -C /tmp/pacman.conf -K /mnt "${pkgs[@]}" | tee -a "$LOG_FILE"
     rm /tmp/pacman.conf
 }
-
-# =================== Configure chroot with systemd-boot ===================
 configure_chroot() {
     cat > /mnt/setup_chroot.sh <<'EOF'
 #!/bin/bash
 set -e
-
 # Install systemd-boot
 bootctl --path=/boot install
 
-# Ensure loader directory exists
+# Create loader directory
 mkdir -p /boot/loader/entries
 
 # Create loader.conf
@@ -232,70 +240,36 @@ cat > /boot/loader/entries/arch.conf <<'EOF2'
 title   Arch Linux
 linux   /vmlinuz-linux
 initrd  /initramfs-linux.img
-options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-label/AcrionRoot) rw
+options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-label/ArchRoot) rw
 EOF2
 
-# Additional setup: locales, users, services...
-# (Insert your existing user setup and system configuration commands here)
-
+# Additional user/system setup can be added here
 EOF
-
     chmod +x /mnt/setup_chroot.sh
-    arch-chroot /mnt /setup_chroot.sh "$@"
+    arch-chroot /mnt /setup_chroot.sh
     rm /mnt/setup_chroot.sh
 }
-
-# =================== Full Installation Process ===================
-run_full_installation() {
+run_install() {
     partition_and_format
-    install_base_system
+    install_base
     genfstab -U /mnt >> /mnt/etc/fstab
     configure_chroot
-    # Add other post-install steps if needed
 }
-
-# =================== Main Menu ===================
+# =================== Main ===================
 main() {
-    if ! command -v dialog &> /dev/null; then echo "dialog required"; exit 1; fi
+    if ! command -v dialog &> /dev/null; then echo "Please install dialog"; exit 1; fi
     > "$LOG_FILE"
     tui_welcome
-    tui_virtualization_check
-
-    while true; do
-        CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Main Menu" --cancel-label "Exit" --menu "Select an option:" 15 70 6 \
-            1 "Configure Network" \
-            2 "Configure Disk" \
-            3 "Setup User & Hostname" \
-            4 "Optional: Software & Customization" \
-            5 "Review & Install" \
-            6 "Quit" 2>&1 >/dev/tty)
-        [ $? -ne 0 ] && break
-
-        case "$CHOICE" in
-            1) tui_network ;;
-            2) tui_disk ;;  # Fixed version
-            3) tui_user ;;
-            4) tui_customization_menu ;;
-            5)
-                if [ "$INSTALLATION_COMPLETE" = true ]; then
-                    dialog --backtitle "AcreetionOS Installer" --msgbox "Already complete." 8 50
-                elif ! $NETWORK_CONFIGURED || ! $DISK_CONFIGURED || ! $USER_CONFIGURED; then
-                    dialog --backtitle "AcreetionOS Installer" --msgbox "Complete all steps first." 8 50
-                else
-                    if tui_review_and_install; then
-                        if dialog --backtitle "AcreetionOS Installer" --title "Warning" --yesno "Proceed? This will erase disk." 10 70; then
-                            clear
-                            run_full_installation
-                            INSTALLATION_COMPLETE=true
-                            dialog --backtitle "AcreetionOS Installer" --msgbox "Installation finished." 8 50
-                        fi
-                    fi
-                fi
-                ;;
-            6) break ;;
-        esac
-    done
+    tui_virtualization
+    tui_network
+    tui_disk
+    if [ "$DISK_CONFIGURED" != "true" ]; then
+        echo "Disk not configured, exiting."
+        exit 1
+    fi
+    if dialog --backtitle "ArchLinux Installer" --title "Ready to install" --yesno "Proceed with installation?" 8 60; then
+        run_install
+        dialog --backtitle "ArchLinux Installer" --msgbox "Installation complete! Reboot now." 8 50
+    fi
 }
-
-# Call main
 main "$@"
