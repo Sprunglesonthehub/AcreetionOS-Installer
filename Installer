@@ -47,19 +47,33 @@ run_cmd() {
     stdbuf -oL -eL "$@" >> "$LOG_FILE" 2>&1
     return $?
 }
-add_pkg() { local pkg_array_name="$1"; local pkg_to_add="$2"; eval "local arr=(\"\${${pkg_array_name}[@]}\")"; for pkg in "${arr[@]}"; do if [ "$pkg" == "$pkg_to_add" ]; then return; fi; done; eval "${pkg_array_name}+=(\"$pkg_to_add\")"; }
+add_pkg() {
+    local pkg_array_name="$1"
+    local pkg_to_add="$2"
+    eval "local arr=(\"\${${pkg_array_name}[@]}\")"
+    for pkg in "${arr[@]}"; do
+        if [ "$pkg" == "$pkg_to_add" ]; then
+            return
+        fi
+    done
+    eval "${pkg_array_name}+=(\"$pkg_to_add\")"
+}
 
 # --- TUI Functions ---
-tui_welcome() { dialog --backtitle "AcreetionOS Installer" --title "Welcome & Warning" --msgbox "Welcome to the AcreetionOS Installer.\n\nThis script will make PERMANENT changes to your disk. Use with extreme caution.\n\nIt is HIGHLY recommended to back up your data before proceeding. All actions are logged to '$LOG_FILE'." 14 70; }
+tui_welcome() {
+    dialog --backtitle "AcreetionOS Installer" --title "Welcome & Warning" --msgbox \
+        "Welcome to the AcreetionOS Installer.\n\nThis script will make PERMANENT changes to your disk. Use with extreme caution.\n\nIt is HIGHLY recommended to back up your data before proceeding. All actions are logged to '$LOG_FILE'." 14 70
+}
 tui_virtualization_check() {
-    dialog --backtitle "AcreetionOS Installer" --title "Environment Check" --yesno "Is this installation taking place inside a Virtual Machine (like VirtualBox, QEMU, VMware)?" 8 70
+    dialog --backtitle "AcreetionOS Installer" --title "Environment Check" --yesno \
+        "Is this installation taking place inside a Virtual Machine (like VirtualBox, QEMU, VMware)?" 8 70
     if [ $? -eq 0 ]; then
         VM_TYPE=$(dialog --backtitle "AcreetionOS Installer" --title "Select Virtualization Platform" --cancel-label "None" --radiolist \
-        "Select your VM software to install guest utilities for better performance, display, and clipboard integration." 15 70 4 \
-        "VirtualBox" "Oracle VirtualBox" "on" \
-        "QEMU" "QEMU/KVM with SPICE" "off" \
-        "VMware" "VMware Workstation/Player/ESXi" "off" \
-        "Hyper-V" "Microsoft Hyper-V" "off" 2>&1 >/dev/tty)
+            "Select your VM software to install guest utilities for better performance, display, and clipboard integration." 15 70 4 \
+            "VirtualBox" "Oracle VirtualBox" "on" \
+            "QEMU" "QEMU/KVM with SPICE" "off" \
+            "VMware" "VMware Workstation/Player/ESXi" "off" \
+            "Hyper-V" "Microsoft Hyper-V" "off" 2>&1 >/dev/tty)
         case "$VM_TYPE" in
             "VirtualBox") add_pkg CHROOT_EXTRA_PKGS "virtualbox-guest-utils" ;;
             "QEMU") add_pkg CHROOT_EXTRA_PKGS "qemu-guest-agent"; add_pkg CHROOT_EXTRA_PKGS "spice-vdagent" ;;
@@ -69,51 +83,90 @@ tui_virtualization_check() {
         esac
     fi
 }
-tui_network() { while true; do CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Network Configuration" --cancel-label "Back" --menu "Select an option:" 15 55 3 1 "Connect to Wi-Fi" 2 "Use Wired Ethernet (or check status)" 3 "Continue (Already Connected)" 2>&1 >/dev/tty); [ $? -ne 0 ] && return; case "$CHOICE" in 1) dialog --backtitle "AcreetionOS Installer" --infobox "Scanning for Wi-Fi networks..." 4 40; sleep 1; local networks=("AcreetionWiFi" "Strong" "CinnamonNet" "Medium" "Public WiFi" "Weak"); WIFI_CHOICE=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --menu "Choose a network:" 15 50 4 "${networks[@]}" 2>&1 >/dev/tty); [ $? -ne 0 ] && continue; WIFI_PASS=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --passwordbox "Enter password for $WIFI_CHOICE:" 8 40 2>&1 >/dev/tty); [ $? -ne 0 ] && continue; dialog --backtitle "AcreetionOS Installer" --infobox "Connecting..." 4 40; ping -c 1 archlinux.org >/dev/null 2>&1; dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30; timedatectl set-ntp true >/dev/null 2>&1; NETWORK_CONFIGURED=true; return;; 2) dialog --backtitle "AcreetionOS Installer" --infobox "Checking connection..." 4 40; ping -c 1 archlinux.org >/dev/null 2>&1; dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30; timedatectl set-ntp true >/dev/null 2>&1; NETWORK_CONFIGURED=true; return;; 3) NETWORK_CONFIGURED=true; return;; esac; done; }
-tui_windows_backup() { 
-    mapfile -t usb_devices < <(lsblk -dno NAME,RM | awk '$2==1 {print "/dev/"$1}'); 
-    if [ ${#usb_devices[@]} -eq 0 ]; then 
-        dialog --backtitle "AcreetionOS Installer" --title "Error" --msgbox "No removable USB drives found. Cannot perform backup." 8 50; 
-        return 1; 
-    fi; 
-    local -a usb_options=(); 
-    for dev_path in "${usb_devices[@]}"; do 
-        usb_options+=("$dev_path" "$(lsblk -dno SIZE,MODEL "$dev_path")"); 
-    done; 
-    local backup_usb; 
-    backup_usb=$(dialog --backtitle "AcreetionOS Installer" --title "Select Backup USB Drive" --cancel-label "Cancel Backup" --radiolist "Select a USB drive to use for the backup:" 20 70 5 "${usb_options[@]}" "on" 2>&1 >/dev/tty); 
-    [ $? -ne 0 ] && return 1; 
-    dialog --backtitle "AcreetionOS Installer" --title "!!! WARNING !!!" --yesno "ALL DATA on the selected USB drive ($backup_usb) will be DESTROYED to create the backup image.\n\nAre you absolutely sure you want to proceed?" 10 70; 
-    [ $? -ne 0 ] && return 1; 
-    local win_partition; 
-    win_partition=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1{print $1}'); 
-    ( 
-        echo 10; 
-        echo "### Formatting USB drive $backup_usb... ###"; 
-        mkfs.ext4 -F "$backup_usb" >/dev/null 2>&1; 
-        sleep 2; 
-        echo 25; 
-        echo "### Mounting USB drive... ###"; 
-        mkdir -p /mnt/backup; 
-        mount "$backup_usb" /mnt/backup; 
-        sleep 2; 
-        echo 50; 
-        echo "### Cloning Windows partition (this will take a long time)... ###"; 
-        ntfsclone --save-image -o - "$win_partition" | gzip -c > /mnt/backup/windows_backup.img.gz; 
-        sleep 1; 
-        echo 90; 
-        echo "### Unmounting USB drive... ###"; 
-        umount /mnt/backup; 
-        sleep 2; 
-        echo 100; 
-        echo "### Backup Complete! ###"; 
-        sleep 1 
-    ) | dialog --backtitle "AcreetionOS Installer" --title "Performing Backup" --gauge "Please wait..." 10 70 0; 
-    dialog --backtitle "AcreetionOS Installer" --title "Backup Complete" --msgbox "The backup of the Windows partition is complete." 8 60; 
-    return 0; 
+tui_network() {
+    while true; do
+        CHOICE=$(dialog --backtitle "AcreetionOS Installer" --title "Network Configuration" --cancel-label "Back" --menu "Select an option:" 15 55 3 \
+            1 "Connect to Wi-Fi" \
+            2 "Use Wired Ethernet (or check status)" \
+            3 "Continue (Already Connected)" 2>&1 >/dev/tty)
+        [ $? -ne 0 ] && return
+        case "$CHOICE" in
+            1)
+                dialog --backtitle "AcreetionOS Installer" --infobox "Scanning for Wi-Fi networks..." 4 40
+                sleep 1
+                local networks=("AcreetionWiFi" "Strong" "CinnamonNet" "Medium" "Public WiFi" "Weak")
+                WIFI_CHOICE=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --menu "Choose a network:" 15 50 4 "${networks[@]}" 2>&1 >/dev/tty)
+                [ $? -ne 0 ] && continue
+                WIFI_PASS=$(dialog --backtitle "AcreetionOS Installer" --cancel-label "Back" --passwordbox "Enter password for $WIFI_CHOICE:" 8 40 2>&1 >/dev/tty)
+                [ $? -ne 0 ] && continue
+                dialog --backtitle "AcreetionOS Installer" --infobox "Connecting..." 4 40
+                ping -c 1 archlinux.org >/dev/null 2>&1
+                dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30
+                timedatectl set-ntp true >/dev/null 2>&1
+                NETWORK_CONFIGURED=true
+                return
+                ;;
+            2)
+                dialog --backtitle "AcreetionOS Installer" --infobox "Checking connection..." 4 40
+                ping -c 1 archlinux.org >/dev/null 2>&1
+                dialog --backtitle "AcreetionOS Installer" --msgbox "Connection successful!" 6 30
+                timedatectl set-ntp true >/dev/null 2>&1
+                NETWORK_CONFIGURED=true
+                return
+                ;;
+            3)
+                NETWORK_CONFIGURED=true
+                return
+                ;;
+        esac
+    done
 }
-# ... (rest of your functions unchanged) ...
+tui_windows_backup() {
+    # Backup Windows partition to USB drive
+    mapfile -t usb_devices < <(lsblk -dno NAME,RM | awk '$2==1 {print "/dev/"$1}')
+    if [ ${#usb_devices[@]} -eq 0 ]; then
+        dialog --backtitle "AcreetionOS Installer" --title "Error" --msgbox "No removable USB drives found. Cannot perform backup." 8 50
+        return 1
+    fi
+    local -a usb_options=()
+    for dev_path in "${usb_devices[@]}"; do
+        usb_options+=("$dev_path" "$(lsblk -dno SIZE,MODEL "$dev_path")")
+    done
+    local backup_usb
+    backup_usb=$(dialog --backtitle "AcreetionOS Installer" --title "Select Backup USB Drive" --cancel-label "Cancel Backup" --radiolist "Select a USB drive to use for the backup:" 20 70 5 "${usb_options[@]}" "on" 2>&1 >/dev/tty)
+    [ $? -ne 0 ] && return 1
+    dialog --backtitle "AcreetionOS Installer" --title "!!! WARNING !!!" --yesno "ALL DATA on the selected USB drive ($backup_usb) will be DESTROYED to create the backup image.\n\nAre you sure?" 10 70
+    [ $? -ne 0 ] && return 1
+    local win_partition
+    win_partition=$(lsblk -plno NAME,FSTYPE "$TARGET_DISK" | grep -i "ntfs" | awk 'NR==1{print $1}')
+    ( 
+        echo 10
+        echo "### Formatting USB drive $backup_usb... ###"
+        mkfs.ext4 -F "$backup_usb" >/dev/null 2>&1
+        sleep 2
+        echo 25
+        echo "### Mounting USB drive... ###"
+        mkdir -p /mnt/backup
+        mount "$backup_usb" /mnt/backup
+        sleep 2
+        echo 50
+        echo "### Cloning Windows partition (this will take a long time)... ###"
+        ntfsclone --save-image -o - "$win_partition" | gzip -c > /mnt/backup/windows_backup.img.gz
+        sleep 1
+        echo 90
+        echo "### Unmounting USB drive... ###"
+        umount /mnt/backup
+        sleep 2
+        echo 100
+        echo "### Backup Complete! ###"
+        sleep 1
+    ) | dialog --backtitle "AcreetionOS Installer" --title "Performing Backup" --gauge "Please wait..." 10 70 0
+    dialog --backtitle "AcreetionOS Installer" --title "Backup Complete" --msgbox "The backup of the Windows partition is complete." 8 60
+    return 0
+}
+# ... (Other functions are unchanged)
 
+# --- Partition and format disk ---
 partition_and_format() {
     run_cmd echo "# --- Partitioning and Formatting Disk: $TARGET_DISK ---"
     umount -R /mnt 2>/dev/null || true
@@ -249,6 +302,7 @@ EOF
     return $exit_code
 }
 
+# --- Main chroot configuration ---
 configure_chroot() {
     run_cmd echo "# --- Preparing Chroot Configuration Script ---"
     local chroot_pkgs_string="${CHROOT_EXTRA_PKGS[*]}"
@@ -256,18 +310,23 @@ configure_chroot() {
 #!/bin/bash
 set -e
 DUAL_BOOT_MODE=$1; HOSTNAME=$2; USERNAME=$3; USER_PASSWORD=$4; shift 4; CHROOT_PKGS_STRING="$@"
+
 echo "--- Configuring base system (timezone, locale, time) ---"
-ln -sf /usr/share/zoneinfo/UTC /etc/localtime; hwclock --systohc
-sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen; locale-gen
+ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+hwclock --systohc
+sed -i 's/^#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
 echo "${HOSTNAME}" > /etc/hostname
+
 cat > /etc/hosts <<HOSTS_EOF
-127.0.0.1   localhost
-::1         localhost
-127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+127.0.0.1 localhost
+::1       localhost
+127.0.1.1 ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
-echo "--- Creating final system pacman.conf ---"
-cat > /etc/pacman.conf <<PACMAN_EOF
+
+# Create pacman config
+cat > /etc/pacman.conf <<'EOF'
 [options]
 Architecture = auto
 SigLevel = Never
@@ -284,26 +343,32 @@ Server = https://darrengames.ddns.net:1500/repo-main/\$arch
 [personal]
 SigLevel = Never
 Server = https://darrengames.ddns.net:1500/personal
-PACMAN_EOF
+EOF
 
-echo "--- Synchronizing new repository databases ---"; pacman -Sy
-echo "--- Setting up user accounts and sudo ---"
+# Sync repos
+pacman -Sy
+
+# Setup user and sudo
 passwd -l root
-useradd -m -G wheel -s /bin/bash "${USERNAME}"; echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
+useradd -m -G wheel -s /bin/bash "${USERNAME}"
+echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-echo "--- Branding system as AcreetionOS ---"
+
+# Branding
 sed -i 's/NAME="Arch Linux"/NAME="AcreetionOS"/' /etc/os-release
 sed -i 's/PRETTY_NAME="Arch Linux"/PRETTY_NAME="AcreetionOS"/' /etc/os-release
 sed -i 's/ID=arch/ID=acreetionos/' /etc/os-release
-echo "--- Installing core desktop environment and software ---"
+
+# Install core desktop
 CORE_PKGS="cinnamon lightdm lightdm-gtk-greeter calamares-config gnome-terminal firefox webapp-manager bluez bluez-utils blueman cups cups-pdf ghostscript gsfonts hplip gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav mint-themes mint-x-icons mint-y-icons fastfetch"
 pacman -S --noconfirm --needed ${CORE_PKGS}
-echo "--- Installing user-selected optional packages ---"
+
+# Install optional packages
 if [ -n "$CHROOT_PKGS_STRING" ]; then
-    echo "Installing repository packages: $CHROOT_PKGS_STRING"
     pacman -S --noconfirm --needed $CHROOT_PKGS_STRING
 fi
-echo "--- Re-generating initramfs to prevent kernel panic ---"
+
+# Re-generate initramfs
 mkinitcpio -P
 
 # --- Install systemd-boot ---
@@ -330,9 +395,9 @@ initrd  /initramfs-linux.img
 options root=PARTUUID=$(blkid -s PARTUUID -o value /dev/disk/by-label/AcrionRoot) rw
 EOF
 
-# Note: Adjust the root= as needed for your setup.
+# Note: Adjust root= as needed.
 
-# --- Enable system services ---
+# Enable services
 systemctl enable lightdm.service
 systemctl enable NetworkManager.service
 systemctl enable cups.service
@@ -340,7 +405,7 @@ systemctl enable bluetooth.service
 if [ -f /usr/lib/systemd/system/timeshift-autosnap.service ]; then
     systemctl enable timeshift-autosnap.service
 fi
-echo "--- Enabling VM Guest Services if installed ---"
+echo "--- Enabling VM guest services if installed ---"
 if [ -f /usr/lib/systemd/system/vboxservice.service ]; then
     systemctl enable vboxservice.service
 fi
@@ -355,31 +420,25 @@ if [ -f /usr/lib/systemd/system/spice-vdagentd.service ]; then
 fi
 EOF
     chmod +x /mnt/setup_chroot.sh
-    run_cmd echo "# --- Executing Chroot Script ---"
+    run_cmd echo "# --- Executing chroot setup ---"
     arch-chroot /mnt /setup_chroot.sh "$@"
     rm /mnt/setup_chroot.sh
     clear
 }
-# End of the chroot script here. This is a big block of code, so it's embedded in your script.
 
 # --- Main functions like run_full_installation, tui_review_and_install, tui_post_install_menu, main() ---
-# (Your existing code remains unchanged, just replace the configure_chroot() function with this fixed version)
+# (Your existing code should call run_full_installation, which calls configure_chroot etc.)
 
 # --- Main ---
 main() {
     if ! command -v dialog &> /dev/null; then echo "Error: dialog required"; exit 1; fi
     > "$LOG_FILE"
-
     tui_welcome
     tui_virtualization_check
 
-    while true; do
-        # Main menu code (your existing menu code)
-        # ...
-        # When user chooses to "Review and Install" and confirms, call run_full_installation
-        # which calls configure_chroot internally
-        # ...
-    done
+    # Your menu loop here...
+    # For the purpose of this example, just call run_full_installation
+    # or integrate as per your script.
 }
 
 main "$@"
