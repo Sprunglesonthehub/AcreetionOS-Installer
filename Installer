@@ -243,6 +243,7 @@ EOF
     
     # Clean up the temporary config file
     rm /tmp/pacman.conf
+    clear # Fix for screen corruption after programbox
     
     return $exit_code
 }
@@ -346,11 +347,12 @@ EOF
     local exit_code=$?
     
     run_cmd rm /mnt/setup_chroot.sh
+    # Clear the screen after the gauge box to prevent artifacts
+    clear
     return $exit_code
 }
 
 run_full_installation() {
-    clear
     ( echo 10; echo "### Partitioning and formatting disk... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 1/4" --gauge "Please wait..." 10 70 0
     partition_and_format; [ $? -ne 0 ] && return 1
 
@@ -459,6 +461,7 @@ main() {
                 else
                     if tui_review_and_install; then
                         if dialog $C_DANGER_BG --title "!!! POINT OF NO RETURN !!!" --yesno "You are about to partition disk ${TARGET_DISK} and install AcreetionOS.\n\nTHIS CANNOT BE UNDONE.\n\nAll selected data will be destroyed. Are you absolutely, positively sure you want to proceed?" 12 70; then
+                            clear # Clean up before starting the install process
                             run_full_installation
                             if [ $? -eq 0 ]; then
                                 INSTALLATION_COMPLETE=true
