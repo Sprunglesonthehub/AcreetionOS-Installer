@@ -246,6 +246,7 @@ EOF2
 # Additional user/system setup can be added here
 EOF
     chmod +x /mnt/setup_chroot.sh
+<<<<<<< HEAD
     arch-chroot /mnt /setup_chroot.sh
     rm /mnt/setup_chroot.sh
 }
@@ -254,6 +255,50 @@ run_install() {
     install_base
     genfstab -U /mnt >> /mnt/etc/fstab
     configure_chroot
+=======
+    run_cmd echo "# --- Executing Chroot Configuration ---"
+    
+    # Run chroot process in background
+    stdbuf -oL -eL arch-chroot /mnt /setup_chroot.sh \
+        "$DUAL_BOOT_MODE" "$HOSTNAME" "$USERNAME" "$USER_PASSWORD" "$chroot_pkgs_string" >> "$LOG_FILE" 2>&1 &
+    local chroot_pid=$!
+
+    # Display a pulsing gauge box to show activity
+    (
+        while ps -p $chroot_pid > /dev/null; do
+            for i in 0 10 20 30 40 50 60 70 80 90 100 90 80 70 60 50 40 30 20 10; do
+                if ! ps -p $chroot_pid > /dev/null; then break 2; fi
+                echo $i; sleep 0.1
+            done
+        done
+        echo 100
+    ) | dialog --backtitle "AcreetionOS Installer" --title "Final Configuration" --gauge "Installing AcreetionOS unique packages, please be patient." 10 70 0
+        
+    wait $chroot_pid
+    local exit_code=$?
+    
+    run_cmd rm /mnt/setup_chroot.sh
+    # Clear the screen after the gauge box to prevent artifacts
+    clear
+    return $exit_code
+}
+
+run_full_installation() {
+    ( echo 10; echo "### Partitioning and formatting disk... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 1/4" --gauge "Please wait..." 10 70 0
+    partition_and_format; [ $? -ne 0 ] && return 1
+
+    dialog --backtitle "AcreetionOS Installer" --title "Installation Step 2/4" --infobox "Starting base system installation (pacstrap)...\n\nThis will show the live package installation from pacstrap." 8 70
+    sleep 2
+    install_base_system; [ $? -ne 0 ] && return 1
+    
+    ( echo 30; echo "### Generating fstab... ###" ) | dialog --backtitle "AcreetionOS Installer" --title "Installation Step 3/4" --gauge "Please wait..." 10 70 0
+    run_cmd genfstab -U /mnt >> /mnt/etc/fstab; [ $? -ne 0 ] && return 1
+
+    # Run the final configuration. The user-facing dialog is now inside this function.
+    configure_chroot; [ $? -ne 0 ] && return 1
+
+    return 0
+>>>>>>> parent of f1551ae (Update Installer)
 }
 # =================== Main ===================
 main() {
